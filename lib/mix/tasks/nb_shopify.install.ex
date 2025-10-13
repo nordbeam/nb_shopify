@@ -194,83 +194,105 @@ if Code.ensure_loaded?(Igniter) do
     defp add_config(igniter) do
       api_version = igniter.args.options[:api_version]
 
-      igniter
-      # Production environment configuration with raises for missing env vars
-      |> Igniter.Project.Config.configure_runtime_env(
-        :prod,
-        :nb_shopify,
-        [:api_key],
-        {:code,
-         quote do
-           System.get_env("SHOPIFY_API_KEY") || raise("SHOPIFY_API_KEY not set")
-         end}
-      )
-      |> Igniter.Project.Config.configure_runtime_env(
-        :prod,
-        :nb_shopify,
-        [:api_secret],
-        {:code,
-         quote do
-           System.get_env("SHOPIFY_API_SECRET") || raise("SHOPIFY_API_SECRET not set")
-         end}
-      )
-      |> Igniter.Project.Config.configure_runtime_env(
-        :prod,
-        :nb_shopify,
-        [:api_version],
-        api_version
-      )
-      # Development environment configuration without raises
-      |> Igniter.Project.Config.configure_runtime_env(
-        :dev,
-        :nb_shopify,
-        [:api_key],
-        {:code,
-         quote do
-           System.get_env("SHOPIFY_API_KEY")
-         end}
-      )
-      |> Igniter.Project.Config.configure_runtime_env(
-        :dev,
-        :nb_shopify,
-        [:api_secret],
-        {:code,
-         quote do
-           System.get_env("SHOPIFY_API_SECRET")
-         end}
-      )
-      |> Igniter.Project.Config.configure_runtime_env(
-        :dev,
-        :nb_shopify,
-        [:api_version],
-        api_version
-      )
-      # Test environment configuration with static test values
-      |> Igniter.Project.Config.configure_runtime_env(
-        :test,
-        :nb_shopify,
-        [:api_key],
-        "test_api_key"
-      )
-      |> Igniter.Project.Config.configure_runtime_env(
-        :test,
-        :nb_shopify,
-        [:api_secret],
-        "test_api_secret"
-      )
-      |> Igniter.Project.Config.configure_runtime_env(
-        :test,
-        :nb_shopify,
-        [:api_version],
-        api_version
-      )
-      |> Igniter.add_notice("""
-      Added NbShopify configuration to config/runtime.exs
+      # Check if nb_shopify config already exists in runtime.exs
+      runtime_path = "config/runtime.exs"
 
-      Make sure to set these environment variables:
-      - SHOPIFY_API_KEY
-      - SHOPIFY_API_SECRET
-      """)
+      config_exists =
+        if File.exists?(runtime_path) do
+          content = File.read!(runtime_path)
+          String.contains?(content, "config :nb_shopify")
+        else
+          false
+        end
+
+      if config_exists do
+        igniter
+        |> Igniter.add_notice("""
+        NbShopify configuration already exists in config/runtime.exs
+
+        Make sure these environment variables are set:
+        - SHOPIFY_API_KEY
+        - SHOPIFY_API_SECRET
+        """)
+      else
+        igniter
+        # Production environment configuration with raises for missing env vars
+        |> Igniter.Project.Config.configure_runtime_env(
+          :prod,
+          :nb_shopify,
+          [:api_key],
+          {:code,
+           quote do
+             System.get_env("SHOPIFY_API_KEY") || raise("SHOPIFY_API_KEY not set")
+           end}
+        )
+        |> Igniter.Project.Config.configure_runtime_env(
+          :prod,
+          :nb_shopify,
+          [:api_secret],
+          {:code,
+           quote do
+             System.get_env("SHOPIFY_API_SECRET") || raise("SHOPIFY_API_SECRET not set")
+           end}
+        )
+        |> Igniter.Project.Config.configure_runtime_env(
+          :prod,
+          :nb_shopify,
+          [:api_version],
+          api_version
+        )
+        # Development environment configuration without raises
+        |> Igniter.Project.Config.configure_runtime_env(
+          :dev,
+          :nb_shopify,
+          [:api_key],
+          {:code,
+           quote do
+             System.get_env("SHOPIFY_API_KEY")
+           end}
+        )
+        |> Igniter.Project.Config.configure_runtime_env(
+          :dev,
+          :nb_shopify,
+          [:api_secret],
+          {:code,
+           quote do
+             System.get_env("SHOPIFY_API_SECRET")
+           end}
+        )
+        |> Igniter.Project.Config.configure_runtime_env(
+          :dev,
+          :nb_shopify,
+          [:api_version],
+          api_version
+        )
+        # Test environment configuration with static test values
+        |> Igniter.Project.Config.configure_runtime_env(
+          :test,
+          :nb_shopify,
+          [:api_key],
+          "test_api_key"
+        )
+        |> Igniter.Project.Config.configure_runtime_env(
+          :test,
+          :nb_shopify,
+          [:api_secret],
+          "test_api_secret"
+        )
+        |> Igniter.Project.Config.configure_runtime_env(
+          :test,
+          :nb_shopify,
+          [:api_version],
+          api_version
+        )
+        |> Igniter.add_notice("""
+        Added NbShopify configuration to config/runtime.exs
+
+        Make sure to set these environment variables:
+        - SHOPIFY_API_KEY
+        - SHOPIFY_API_SECRET
+        """)
+      end
     end
 
     # Add frontend dependencies if package.json exists
