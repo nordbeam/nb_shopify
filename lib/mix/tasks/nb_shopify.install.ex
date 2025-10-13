@@ -1299,15 +1299,7 @@ if Code.ensure_loaded?(Igniter) do
       exec mix phx.server
       """
 
-      igniter
-      |> Igniter.create_new_file("dev.sh", content, on_exists: :skip)
-      |> then(fn igniter ->
-        # Make dev.sh executable
-        Igniter.add_task(igniter, fn ->
-          File.chmod("dev.sh", 0o755)
-          :ok
-        end)
-      end)
+      Igniter.create_new_file(igniter, "dev.sh", content, on_exists: :skip)
     end
 
     defp add_proxy_notices(igniter) do
@@ -1322,7 +1314,8 @@ if Code.ensure_loaded?(Igniter) do
 
       To use:
       1. Install Caddy: https://caddyserver.com/docs/install
-      2. Run: shopify app dev (or ./dev.sh directly)
+      2. Make dev.sh executable: chmod +x dev.sh
+      3. Run: shopify app dev (or ./dev.sh directly)
 
       IMPORTANT: You must manually update your Vite config for this setup:
 
