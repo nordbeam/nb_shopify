@@ -759,7 +759,7 @@ if Code.ensure_loaded?(Igniter) do
 
         \"\"\"
         def uninstall_shop(%Shop{} = shop) do
-          update_shop(shop, %{uninstalled_at: DateTime.utc_now()})
+          update_shop(shop, %{uninstalled_at: DateTime.utc_now() |> DateTime.truncate(:second)})
         end
 
         @doc \"\"\"
@@ -829,10 +829,10 @@ if Code.ensure_loaded?(Igniter) do
           field :shop_domain, :string
           field :access_token, :string
           field :scope, :string
-          field :installed_at, :utc_datetime_usec
-          field :uninstalled_at, :utc_datetime_usec
+          field :installed_at, :utc_datetime
+          field :uninstalled_at, :utc_datetime
 
-          timestamps(type: :utc_datetime_usec)
+          timestamps(type: :utc_datetime)
         end
 
         @doc false
@@ -848,7 +848,7 @@ if Code.ensure_loaded?(Igniter) do
         defp maybe_set_installed_at(changeset) do
           if get_change(changeset, :installed_at) == nil and
                get_field(changeset, :installed_at) == nil do
-            put_change(changeset, :installed_at, DateTime.utc_now())
+            put_change(changeset, :installed_at, DateTime.utc_now() |> DateTime.truncate(:second))
           else
             changeset
           end
@@ -884,10 +884,10 @@ if Code.ensure_loaded?(Igniter) do
             add :shop_domain, :string, null: false
             add :access_token, :string, null: false
             add :scope, :string, null: false
-            add :installed_at, :utc_datetime_usec
-            add :uninstalled_at, :utc_datetime_usec
+            add :installed_at, :utc_datetime
+            add :uninstalled_at, :utc_datetime
 
-            timestamps(type: :utc_datetime_usec)
+            timestamps(type: :utc_datetime)
           end
 
           create unique_index(:shops, [:shop_domain])
