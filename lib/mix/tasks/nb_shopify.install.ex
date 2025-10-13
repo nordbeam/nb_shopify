@@ -149,7 +149,7 @@ if Code.ensure_loaded?(Igniter) do
 
     # Add nb_shopify dependency to mix.exs
     defp add_dependencies(igniter) do
-      igniter = Igniter.Project.Deps.add_dep(igniter, {:nb_shopify, "~> 0.1"})
+      igniter = Igniter.Project.Deps.add_dep(igniter, {:nb_shopify, github: "nordbeam/nb", sparse: "nb_shopify"})
 
       if igniter.args.options[:with_webhooks] do
         Igniter.Project.Deps.add_dep(igniter, {:oban, "~> 2.15"})
