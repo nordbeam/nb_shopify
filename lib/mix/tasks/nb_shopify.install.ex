@@ -40,8 +40,9 @@ if Code.ensure_loaded?(Igniter) do
 
     ## What It Does
 
-    1. **Adds Dependencies**: Adds `{:nb_shopify, "~> 0.1"}` to mix.exs
+    1. **Adds Dependencies**:
        - Optionally adds `{:oban, "~> 2.15"}` if --with-webhooks
+       - Note: nb_shopify itself is added by `mix igniter.install`
 
     2. **Configuration**: Creates config in `config/runtime.exs`:
        - Shopify API credentials from environment variables
@@ -149,7 +150,8 @@ if Code.ensure_loaded?(Igniter) do
 
     # Add nb_shopify dependency to mix.exs
     defp add_dependencies(igniter) do
-      igniter = Igniter.Project.Deps.add_dep(igniter, {:nb_shopify, github: "nordbeam/nb", sparse: "nb_shopify"})
+      # Don't add nb_shopify itself - it's already added by igniter.install
+      # This matches nb_inertia's approach which doesn't re-add itself
 
       if igniter.args.options[:with_webhooks] do
         Igniter.Project.Deps.add_dep(igniter, {:oban, "~> 2.15"})
