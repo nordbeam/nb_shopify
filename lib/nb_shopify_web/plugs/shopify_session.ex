@@ -156,19 +156,19 @@ defmodule NbShopifyWeb.Plugs.ShopifySession do
       |> put_session(:shop_domain, shop_domain)
       |> assign(:shop, shop)
     else
-      {:error, :token_exchange, reason} ->
-        Logger.error("Token exchange failed: #{inspect(reason)}")
-
-        conn
-        |> put_flash(:error, "Authentication failed. Please try again.")
-        |> redirect(to: "/")
-        |> halt()
-
       {:error, :save_shop, changeset} ->
         Logger.error("Failed to save shop: #{inspect(changeset)}")
 
         conn
         |> put_flash(:error, "Failed to save shop data.")
+        |> redirect(to: "/")
+        |> halt()
+
+      {:error, reason} ->
+        Logger.error("Token exchange failed: #{inspect(reason)}")
+
+        conn
+        |> put_flash(:error, "Authentication failed. Please try again.")
         |> redirect(to: "/")
         |> halt()
     end

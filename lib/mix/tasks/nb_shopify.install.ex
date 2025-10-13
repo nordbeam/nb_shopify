@@ -246,69 +246,74 @@ if Code.ensure_loaded?(Igniter) do
     # Setup router with Shopify pipelines and routes
     defp setup_router(igniter) do
       web_module = Igniter.Libs.Phoenix.web_module(igniter)
+      app_module = Igniter.Project.Application.app_module(igniter)
+      with_database = igniter.args.options[:with_database]
 
-      # Add the shopify_app pipeline
-      pipeline_code = """
-        pipeline :shopify_app do
-          plug :accepts, ["html"]
-          plug :fetch_session
-          plug :fetch_live_flash
-          plug :protect_from_forgery
-          plug :put_secure_browser_headers
-          plug NbShopifyWeb.Plugs.ShopifyFrameHeaders
+      # Build ShopifySession plug configuration
+      session_plug =
+        if with_database do
+          """
+          plug #{inspect(web_module)}.Plugs.ShopifySession,
+            get_shop_by_id: &#{inspect(app_module)}.Shops.get_shop/1,
+            get_shop_by_domain: &#{inspect(app_module)}.Shops.get_shop_by_domain/1,
+            upsert_shop: &#{inspect(app_module)}.Shops.upsert_shop/1
+          """
+        else
+          """
           # Uncomment and configure when you have a Shop context:
-          # plug NbShopifyWeb.Plugs.ShopifySession,
-          #   get_shop_by_id: &MyApp.Shops.get_shop/1,
-          #   get_shop_by_domain: &MyApp.Shops.get_shop_by_domain/1,
-          #   upsert_shop: &MyApp.Shops.upsert_shop/1
+          # plug #{inspect(web_module)}.Plugs.ShopifySession,
+          #   get_shop_by_id: &YourApp.Shops.get_shop/1,
+          #   get_shop_by_domain: &YourApp.Shops.get_shop_by_domain/1,
+          #   upsert_shop: &YourApp.Shops.upsert_shop/1
+          """
         end
+
+      # Add the shopify_app pipeline (just the inner content, not the wrapper)
+      pipeline_code = """
+      plug :accepts, ["html"]
+      plug :fetch_session
+      plug :fetch_live_flash
+      plug :protect_from_forgery
+      plug :put_secure_browser_headers
+      plug #{inspect(web_module)}.Plugs.ShopifyFrameHeaders
+      #{session_plug}
       """
 
-      # Add example routes
+      # Add example routes (just the inner content, not the scope wrapper)
       routes_code = """
-        scope "/", #{inspect(web_module)} do
-          pipe_through :shopify_app
+      pipe_through :shopify_app
 
-          get "/", PageController, :index
-        end
+      get "/", PageController, :index
       """
 
-      # Wrap router operations in error handling
+      # Add router operations
       igniter =
-        case Igniter.Libs.Phoenix.add_pipeline(igniter, :shopify_app, pipeline_code,
-               arg2: web_module
-             ) do
-          {:error, igniter} ->
-            Igniter.add_warning(
-              igniter,
-              "Could not add Shopify pipeline to router. You may need to manually add the :shopify_app pipeline to #{inspect(web_module)}.Router."
-            )
+        igniter
+        |> Igniter.Libs.Phoenix.add_pipeline(:shopify_app, pipeline_code, [])
+        |> Igniter.Libs.Phoenix.add_scope("/", routes_code, [])
 
-          result ->
-            result
+      notice =
+        if with_database do
+          """
+          Added Shopify pipelines and routes to your router.
+
+          The :shopify_app pipeline includes:
+          - ShopifyFrameHeaders plug for iframe embedding
+          - ShopifySession plug (configured with your Shops context)
+          """
+        else
+          """
+          Added Shopify pipelines and routes to your router.
+
+          The :shopify_app pipeline includes:
+          - ShopifyFrameHeaders plug for iframe embedding
+          - ShopifySession plug (commented out - configure after setting up Shop context)
+
+          To enable ShopifySession, run with --with-database or manually configure it.
+          """
         end
 
-      igniter =
-        case Igniter.Libs.Phoenix.add_scope(igniter, "/shopify", routes_code, arg2: web_module) do
-          {:error, igniter} ->
-            Igniter.add_warning(
-              igniter,
-              "Could not add Shopify routes to router. You may need to manually add the /shopify scope to #{inspect(web_module)}.Router."
-            )
-
-          result ->
-            result
-        end
-
-      Igniter.add_notice(igniter, """
-      Added Shopify pipelines and routes to your router.
-
-      The :shopify_app pipeline includes:
-      - ShopifyFrameHeaders plug for iframe embedding
-      - ShopifySession plug (commented out - configure after setting up Shop context)
-
-      Configure the ShopifySession plug callbacks after creating your Shop context.
-      """)
+      Igniter.add_notice(igniter, notice)
     end
 
     # Setup webhooks with Oban worker and controller
@@ -326,9 +331,7 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp create_webhook_handler(igniter) do
-      web_module = Igniter.Libs.Phoenix.web_module(igniter)
-      app_module = web_module |> Module.split() |> List.first() |> Module.concat(nil)
-
+      app_module = Igniter.Project.Application.app_module(igniter)
       handler_module = Module.concat([app_module, ShopifyWebhookHandler])
 
       content = """
@@ -385,7 +388,7 @@ if Code.ensure_loaded?(Igniter) do
           :ok
         end
 
-        defp handle_shop_update(shop, payload) do
+        defp handle_shop_update(shop, _payload) do
           Logger.info("Shop updated: \#{shop.shop_domain}")
           # TODO: Update shop information
           :ok
@@ -422,20 +425,23 @@ if Code.ensure_loaded?(Igniter) do
 
     defp create_webhook_controller(igniter) do
       web_module = Igniter.Libs.Phoenix.web_module(igniter)
+      app_module = Igniter.Project.Application.app_module(igniter)
       controller_module = Module.concat([web_module, WebhookController])
 
       content = """
         use #{inspect(web_module)}, :controller
 
         require Logger
+        alias #{inspect(app_module)}.Shops
 
         @doc \"\"\"
         Handles incoming Shopify webhooks.
 
         This endpoint:
         1. Verifies the webhook HMAC
-        2. Enqueues the webhook for background processing
-        3. Returns 200 OK immediately
+        2. Looks up the shop by domain
+        3. Enqueues the webhook for background processing
+        4. Returns 200 OK immediately
         \"\"\"
         def create(conn, params) do
           # Get required headers
@@ -447,11 +453,12 @@ if Code.ensure_loaded?(Igniter) do
           {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
 
           # Verify webhook authenticity
-          if NbShopify.verify_webhook_hmac(raw_body, hmac) do
+          with true <- NbShopify.verify_webhook_hmac(raw_body, hmac),
+               shop when not is_nil(shop) <- Shops.get_shop_by_domain(shop_domain) do
             # Queue webhook for background processing
             %{
               topic: topic,
-              shop_domain: shop_domain,
+              shop_id: shop.id,
               payload: params
             }
             |> NbShopify.Workers.WebhookWorker.new()
@@ -461,11 +468,19 @@ if Code.ensure_loaded?(Igniter) do
 
             json(conn, %{status: "ok"})
           else
-            Logger.error("Invalid webhook HMAC from \#{shop_domain}")
+            false ->
+              Logger.error("Invalid webhook HMAC from \#{shop_domain}")
 
-            conn
-            |> put_status(:unauthorized)
-            |> json(%{error: "Invalid HMAC"})
+              conn
+              |> put_status(:unauthorized)
+              |> json(%{error: "Invalid HMAC"})
+
+            nil ->
+              Logger.error("Shop not found: \#{shop_domain}")
+
+              conn
+              |> put_status(:not_found)
+              |> json(%{error: "Shop not found"})
           end
         end
       """
@@ -481,53 +496,23 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp add_webhook_routes(igniter) do
-      web_module = Igniter.Libs.Phoenix.web_module(igniter)
-
-      # Add webhook pipeline
+      # Add webhook pipeline (just the inner content)
       webhook_pipeline = """
-        pipeline :shopify_webhook do
-          plug :accepts, ["json"]
-        end
+      plug :accepts, ["json"]
       """
 
-      # Add webhook routes
+      # Add webhook routes (just the inner content)
       webhook_routes = """
-        scope "/webhooks", #{inspect(web_module)} do
-          pipe_through :shopify_webhook
+      pipe_through :shopify_webhook
 
-          post "/shopify", WebhookController, :create
-        end
+      post "/shopify", WebhookController, :create
       """
 
-      # Wrap pipeline addition in error handling
+      # Add webhook pipeline and routes
       igniter =
-        case Igniter.Libs.Phoenix.add_pipeline(igniter, :shopify_webhook, webhook_pipeline,
-               arg2: web_module
-             ) do
-          {:error, igniter} ->
-            Igniter.add_warning(
-              igniter,
-              "Could not add webhook pipeline to router. You may need to manually add the :shopify_webhook pipeline."
-            )
-
-          result ->
-            result
-        end
-
-      # Wrap scope addition in error handling
-      igniter =
-        case Igniter.Libs.Phoenix.add_scope(igniter, "/webhooks", webhook_routes,
-               arg2: web_module
-             ) do
-          {:error, igniter} ->
-            Igniter.add_warning(
-              igniter,
-              "Could not add webhook routes to router. You may need to manually add the /webhooks scope."
-            )
-
-          result ->
-            result
-        end
+        igniter
+        |> Igniter.Libs.Phoenix.add_pipeline(:shopify_webhook, webhook_pipeline, [])
+        |> Igniter.Libs.Phoenix.add_scope("/webhooks", webhook_routes, [])
 
       Igniter.add_notice(igniter, """
       Added webhook routes to your router.
@@ -538,8 +523,7 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp configure_webhook_handler(igniter) do
-      web_module = Igniter.Libs.Phoenix.web_module(igniter)
-      app_module = web_module |> Module.split() |> List.first() |> Module.concat(nil)
+      app_module = Igniter.Project.Application.app_module(igniter)
       handler_module = Module.concat([app_module, ShopifyWebhookHandler])
 
       config_code = """
@@ -550,33 +534,21 @@ if Code.ensure_loaded?(Igniter) do
         get_shop: &#{inspect(app_module)}.Shops.get_shop/1
       """
 
-      # Wrap config file operations in error handling
-      igniter =
-        igniter
-        |> Igniter.include_or_create_file("config/config.exs", """
-        import Config
-        """)
+      igniter
+      |> Igniter.include_or_create_file("config/config.exs", """
+      import Config
+      """)
+      |> Igniter.update_file("config/config.exs", fn source ->
+        content = Rewrite.Source.get(source, :content)
 
-      case Igniter.update_file(igniter, "config/config.exs", fn source ->
-             content = Rewrite.Source.get(source, :content)
-
-             if String.contains?(content, ":webhook_handler") do
-               source
-             else
-               Rewrite.Source.update(source, :content, fn content ->
-                 content <> "\n" <> config_code
-               end)
-             end
-           end) do
-        {:error, igniter} ->
-          Igniter.add_warning(
-            igniter,
-            "Could not update config/config.exs with webhook handler configuration. You may need to manually add the webhook handler config."
-          )
-
-        result ->
-          result
-      end
+        if String.contains?(content, ":webhook_handler") do
+          source
+        else
+          Rewrite.Source.update(source, :content, fn content ->
+            content <> "\n" <> config_code
+          end)
+        end
+      end)
     end
 
     defp maybe_configure_oban(igniter) do
@@ -675,8 +647,7 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp create_shops_context(igniter) do
-      web_module = Igniter.Libs.Phoenix.web_module(igniter)
-      app_module = web_module |> Module.split() |> List.first() |> Module.concat(nil)
+      app_module = Igniter.Project.Application.app_module(igniter)
       context_module = Module.concat([app_module, Shops])
 
       content = """
@@ -817,7 +788,7 @@ if Code.ensure_loaded?(Igniter) do
             :ok
 
         \"\"\"
-        def post_install(shop, is_first_install) do
+        def post_install(_shop, is_first_install) do
           if is_first_install do
             # First time installation
             # TODO: Create default data, subscribe to webhooks, etc.
@@ -840,8 +811,7 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp create_shop_schema(igniter) do
-      web_module = Igniter.Libs.Phoenix.web_module(igniter)
-      app_module = web_module |> Module.split() |> List.first() |> Module.concat(nil)
+      app_module = Igniter.Project.Application.app_module(igniter)
       schema_module = Module.concat([app_module, Shops, Shop])
 
       content = """
@@ -899,11 +869,10 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp create_shop_migration(igniter) do
-      timestamp = DateTime.utc_now() |> DateTime.to_unix() |> to_string()
+      timestamp = Calendar.strftime(DateTime.utc_now(), "%Y%m%d%H%M%S")
       migration_path = "priv/repo/migrations/#{timestamp}_create_shops.exs"
 
-      web_module = Igniter.Libs.Phoenix.web_module(igniter)
-      app_module = web_module |> Module.split() |> List.first() |> Module.concat(nil)
+      app_module = Igniter.Project.Application.app_module(igniter)
 
       content = """
       defmodule #{inspect(app_module)}.Repo.Migrations.CreateShops do
@@ -942,12 +911,14 @@ if Code.ensure_loaded?(Igniter) do
     defp maybe_setup_shopify_cli(igniter) do
       if igniter.args.options[:with_cli] do
         igniter
+        |> create_package_json()
         |> create_shopify_app_toml()
         |> create_shopify_web_toml()
         |> create_shopify_directory()
         |> create_env_example()
         |> Igniter.add_notice("""
         Created Shopify CLI configuration files:
+        - package.json (for Shopify CLI compatibility)
         - shopify.app.toml (app configuration)
         - shopify.web.toml (web process configuration)
         - .shopify/project.json (CLI project metadata)
@@ -963,6 +934,27 @@ if Code.ensure_loaded?(Igniter) do
       else
         igniter
       end
+    end
+
+    defp create_package_json(igniter) do
+      app_name = Igniter.Project.Application.app_name(igniter) |> to_string()
+
+      content = """
+      {
+        "name": "#{app_name}",
+        "version": "0.1.0",
+        "private": true,
+        "description": "Phoenix Shopify app",
+        "scripts": {
+          "dev": "mix phx.server"
+        },
+        "workspaces": [
+          "assets"
+        ]
+      }
+      """
+
+      Igniter.create_new_file(igniter, "package.json", content, on_exists: :skip)
     end
 
     defp create_shopify_app_toml(igniter) do
@@ -983,10 +975,12 @@ if Code.ensure_loaded?(Igniter) do
       automatically_update_urls_on_dev = true
       include_config_on_deploy = true
 
-      # Declare access scopes
-      # Customize based on your app's needs: https://shopify.dev/docs/api/usage/access-scopes
+      # Declare access scopes required by your app
+      # IMPORTANT: Customize these based on your app's needs!
+      # See: https://shopify.dev/docs/api/usage/access-scopes
       [access_scopes]
-      scopes = "read_products,write_products"
+      # Minimal scopes - update based on your requirements
+      scopes = "read_products"
 
       # Webhooks configuration
       # The CLI will automatically register these webhooks
@@ -1072,9 +1066,10 @@ if Code.ensure_loaded?(Igniter) do
       # Note: Shopify CLI sets this automatically via HOST variable
       export SHOPIFY_REDIRECT_URI=http://localhost:4000/auth/callback
 
-      # Comma-separated list of OAuth scopes
+      # Comma-separated list of OAuth scopes (must match shopify.app.toml)
       # Note: Shopify CLI reads this from shopify.app.toml
-      export SHOPIFY_SCOPES=read_products,write_products
+      # Customize based on your app's needs: https://shopify.dev/docs/api/usage/access-scopes
+      export SHOPIFY_SCOPES=read_products
 
       # Database
       export DATABASE_URL=postgres://postgres:postgres@localhost/#{app_name}_dev
@@ -1134,9 +1129,12 @@ if Code.ensure_loaded?(Igniter) do
 
              For manual setup without CLI, see .env.example
 
-          #{step_counter.count + 1}. Update your router configuration:
-             - Configure ShopifySession plug callbacks
-             - Customize routes as needed
+          #{step_counter.count + 1}. #{if igniter.args.options[:with_database], do: "Review", else: "Configure"} your router configuration:
+             #{if igniter.args.options[:with_database] do
+            "- ShopifySession plug is already configured with Shops context\n             - Customize routes as needed"
+          else
+            "- Configure ShopifySession plug callbacks if needed\n             - Customize routes as needed"
+          end}
           """
 
           {steps, %{count: step_counter.count + 2}}
@@ -1150,9 +1148,12 @@ if Code.ensure_loaded?(Igniter) do
              export SHOPIFY_API_KEY="your-api-key"
              export SHOPIFY_API_SECRET="your-api-secret"
 
-          #{step_counter.count + 1}. Update your router configuration:
-             - Configure ShopifySession plug callbacks
-             - Customize routes as needed
+          #{step_counter.count + 1}. #{if igniter.args.options[:with_database], do: "Review", else: "Configure"} your router configuration:
+             #{if igniter.args.options[:with_database] do
+            "- ShopifySession plug is already configured with Shops context\n             - Customize routes as needed"
+          else
+            "- Configure ShopifySession plug callbacks if needed\n             - Customize routes as needed"
+          end}
           """
 
           {steps, %{count: step_counter.count + 2}}
@@ -1164,12 +1165,9 @@ if Code.ensure_loaded?(Igniter) do
 
           #{step_counter.count}. Run database migrations:
              mix ecto.migrate
-
-          #{step_counter.count + 1}. Update ShopifySession plug in router.ex:
-             Uncomment and configure the plug with your Shops context functions
           """
 
-          {steps, %{count: step_counter.count + 2}}
+          {steps, %{count: step_counter.count + 1}}
         else
           {"", step_counter}
         end

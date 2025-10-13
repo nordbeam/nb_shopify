@@ -140,10 +140,6 @@ defmodule NbShopify do
       {:error, reason} = error ->
         Logger.warning("Session token verification failed: #{inspect(reason)}")
         error
-
-      error ->
-        Logger.warning("Session token validation failed: #{inspect(error)}")
-        {:error, :invalid_token}
     end
   end
 
