@@ -1253,6 +1253,7 @@ if Code.ensure_loaded?(Igniter) do
         igniter
         |> create_caddyfile()
         |> create_dev_script()
+        |> update_shopify_web_toml()
         |> add_proxy_notices()
       else
         igniter
@@ -1324,12 +1325,35 @@ if Code.ensure_loaded?(Igniter) do
       Igniter.create_new_file(igniter, "dev.sh", content, on_exists: :skip)
     end
 
+    defp update_shopify_web_toml(igniter) do
+      shopify_web_path = "shopify.web.toml"
+
+      if File.exists?(shopify_web_path) do
+        igniter
+        |> Igniter.update_file(shopify_web_path, fn source ->
+          content = Rewrite.Source.get(source, :content)
+
+          updated_content =
+            content
+            |> String.replace(
+              ~r/dev = "mix phx\.server"/,
+              "dev = \"./dev.sh\""
+            )
+
+          Rewrite.Source.update(source, :content, updated_content)
+        end)
+      else
+        igniter
+      end
+    end
+
     defp add_proxy_notices(igniter) do
       igniter
       |> Igniter.add_notice("""
       Created Caddy reverse proxy setup:
       - Caddyfile: Proxies /_vite/* to Vite (5173), everything else to Phoenix (4000)
       - dev.sh: Process manager that starts Caddy + Phoenix together
+      - shopify.web.toml: Updated to use ./dev.sh for development
 
       Architecture:
         Shopify CLI → Caddy (port from $PORT or 3000) → Vite (5173) / Phoenix (4000)
@@ -1337,7 +1361,7 @@ if Code.ensure_loaded?(Igniter) do
       To use:
       1. Install Caddy: https://caddyserver.com/docs/install
       2. Make dev.sh executable: chmod +x dev.sh
-      3. Run: shopify app dev (or ./dev.sh directly)
+      3. Run: shopify app dev (this will now use dev.sh automatically)
 
       IMPORTANT: You must manually update your Vite config for this setup:
 
