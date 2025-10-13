@@ -341,7 +341,7 @@ if Code.ensure_loaded?(Igniter) do
     # Setup router with Shopify pipelines and routes
     defp setup_router(igniter) do
       web_module = Igniter.Libs.Phoenix.web_module(igniter)
-      app_module = Igniter.Project.Application.app_module(igniter)
+      app_module = Igniter.Project.Module.module_name_prefix(igniter)
       with_database = igniter.args.options[:with_database]
 
       # Build ShopifySession plug configuration
@@ -663,7 +663,7 @@ if Code.ensure_loaded?(Igniter) do
 
     defp configure_webhook_handler(igniter) do
       web_module = Igniter.Libs.Phoenix.web_module(igniter)
-      app_module = Igniter.Project.Application.app_module(igniter)
+      app_module = Igniter.Project.Module.module_name_prefix(igniter)
       handler_module = Module.concat([web_module, ShopifyWebhookHandler])
 
       config_code = """
@@ -787,7 +787,7 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp create_shops_context(igniter) do
-      app_module = Igniter.Project.Application.app_module(igniter)
+      app_module = Igniter.Project.Module.module_name_prefix(igniter)
       context_module = Module.concat([app_module, Shops])
 
       content = """
@@ -951,7 +951,7 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp create_shop_schema(igniter) do
-      app_module = Igniter.Project.Application.app_module(igniter)
+      app_module = Igniter.Project.Module.module_name_prefix(igniter)
       schema_module = Module.concat([app_module, Shops, Shop])
 
       content = """
@@ -1012,7 +1012,7 @@ if Code.ensure_loaded?(Igniter) do
       timestamp = Calendar.strftime(DateTime.utc_now(), "%Y%m%d%H%M%S")
       migration_path = "priv/repo/migrations/#{timestamp}_create_shops.exs"
 
-      app_module = Igniter.Project.Application.app_module(igniter)
+      app_module = Igniter.Project.Module.module_name_prefix(igniter)
 
       content = """
       defmodule #{inspect(app_module)}.Repo.Migrations.CreateShops do
