@@ -829,10 +829,10 @@ if Code.ensure_loaded?(Igniter) do
           field :shop_domain, :string
           field :access_token, :string
           field :scope, :string
-          field :installed_at, :utc_datetime
-          field :uninstalled_at, :utc_datetime
+          field :installed_at, :utc_datetime_usec
+          field :uninstalled_at, :utc_datetime_usec
 
-          timestamps(type: :utc_datetime)
+          timestamps(type: :utc_datetime_usec)
         end
 
         @doc false
@@ -884,10 +884,10 @@ if Code.ensure_loaded?(Igniter) do
             add :shop_domain, :string, null: false
             add :access_token, :string, null: false
             add :scope, :string, null: false
-            add :installed_at, :utc_datetime
-            add :uninstalled_at, :utc_datetime
+            add :installed_at, :utc_datetime_usec
+            add :uninstalled_at, :utc_datetime_usec
 
-            timestamps(type: :utc_datetime)
+            timestamps(type: :utc_datetime_usec)
           end
 
           create unique_index(:shops, [:shop_domain])
