@@ -108,7 +108,7 @@ if Code.ensure_loaded?(Igniter) do
     ## Documentation
 
     For more information, see:
-    - https://github.com/assim-fayas/nb/tree/main/nb_shopify
+    - https://github.com/nordbeam/nb/tree/main/nb_shopify
     - https://shopify.dev/docs/apps
     """
 
@@ -1144,7 +1144,7 @@ if Code.ensure_loaded?(Igniter) do
 
       ## Documentation:
 
-      - NbShopify: https://github.com/assim-fayas/nb/tree/main/nb_shopify
+      - NbShopify: https://github.com/nordbeam/nb/tree/main/nb_shopify
       - Shopify App Development: https://shopify.dev/docs/apps
       - Managed Installation: https://shopify.dev/docs/apps/auth/oauth/managed-install
       #{if igniter.args.options[:with_cli], do: "- Shopify CLI: https://shopify.dev/docs/apps/tools/cli", else: ""}
@@ -1171,7 +1171,7 @@ else
 
     To use the full installer with automatic configuration, install igniter:
 
-        {:igniter, "~> 0.5", only: [:dev]}
+        {:igniter, "~> 0.6", only: [:dev]}
 
     Then run:
 
@@ -1179,7 +1179,7 @@ else
         mix nb_shopify.install
 
     For manual installation, see:
-    https://github.com/assim-fayas/nb/tree/main/nb_shopify#installation
+    https://github.com/nordbeam/nb/tree/main/nb_shopify#installation
     """
 
     use Mix.Task
@@ -1190,7 +1190,7 @@ else
 
       Add igniter to your mix.exs:
 
-          {:igniter, "~> 0.5", only: [:dev]}
+          {:igniter, "~> 0.6", only: [:dev]}
 
       Then run:
 
