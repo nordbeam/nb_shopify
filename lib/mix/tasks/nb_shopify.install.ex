@@ -151,7 +151,7 @@ if Code.ensure_loaded?(Igniter) do
     # Add nb_shopify dependency to mix.exs
     defp add_dependencies(igniter) do
       # Don't add nb_shopify itself - it's already added by igniter.install
-      # This matches nb_inertia's approach which doesn't re-add itself
+      # This matches nb_inertia's pattern (see nb_inertia.install.ex line 159)
 
       if igniter.args.options[:with_webhooks] do
         Igniter.Project.Deps.add_dep(igniter, {:oban, "~> 2.15"})
