@@ -587,26 +587,79 @@ if Code.ensure_loaded?(Igniter) do
 
     defp add_oban_config(igniter) do
       app_name = Igniter.Project.Application.app_name(igniter)
+      repo_module = Module.concat([app_name |> to_string() |> Macro.camelize(), Repo])
 
-      oban_config =
-        {:code,
-         quote do
-           [
-             repo: unquote(Module.concat([app_name |> to_string() |> Macro.camelize(), Repo])),
-             queues: [default: 10, webhooks: 20],
-             plugins: [Oban.Plugins.Pruner]
-           ]
-         end}
+      if Igniter.Project.Config.configures_root_key?(igniter, "config.exs", :oban) do
+        # Oban config exists - add webhooks queue to existing queues config
+        igniter
+        |> Igniter.Project.Config.configure(
+          "config.exs",
+          :oban,
+          [:queues],
+          {:code,
+           quote do
+             [webhooks: 20]
+           end},
+          updater: fn zipper ->
+            # Merge webhooks queue into existing queues
+            current = Sourceror.Zipper.node(zipper)
 
-      igniter
-      |> Igniter.Project.Config.configure("config.exs", :oban, [], oban_config)
-      |> Igniter.add_notice("""
-      Added Oban configuration to config.exs
+            case current do
+              {_, _, items} when is_list(items) ->
+                # It's a keyword list, add webhooks if not present
+                if Keyword.has_key?(items, :webhooks) do
+                  {:ok, zipper}
+                else
+                  new_list = items ++ [webhooks: 20]
+                  {:ok, Sourceror.Zipper.replace(zipper, {:{}, [], new_list})}
+                end
 
-      Make sure to:
-      1. Run migrations: mix ecto.migrate
-      2. Add Oban to your supervision tree if not already present
-      """)
+              _ ->
+                {:ok, zipper}
+            end
+          end
+        )
+        |> Igniter.add_notice("""
+        Added webhooks queue to existing Oban configuration in config.exs
+        """)
+      else
+        # Oban config doesn't exist - create full config
+        igniter
+        |> Igniter.Project.Config.configure_new(
+          "config.exs",
+          :oban,
+          [:repo],
+          {:code,
+           quote do
+             unquote(repo_module)
+           end}
+        )
+        |> Igniter.Project.Config.configure_new(
+          "config.exs",
+          :oban,
+          [:queues],
+          {:code,
+           quote do
+             [default: 10, webhooks: 20]
+           end}
+        )
+        |> Igniter.Project.Config.configure_new(
+          "config.exs",
+          :oban,
+          [:plugins],
+          {:code,
+           quote do
+             [Oban.Plugins.Pruner]
+           end}
+        )
+        |> Igniter.add_notice("""
+        Added Oban configuration to config.exs
+
+        Make sure to:
+        1. Run migrations: mix ecto.migrate
+        2. Add Oban to your supervision tree if not already present
+        """)
+      end
     end
 
     # Setup database with Shop schema and context
