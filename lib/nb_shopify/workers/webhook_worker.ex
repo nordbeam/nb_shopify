@@ -52,17 +52,19 @@ if Code.ensure_loaded?(Oban) do
 
         config :nb_shopify, :webhook_handler,
           module: MyApp.ShopifyWebhookHandler,
-          get_shop: &MyApp.Shops.get_shop!/1
+          get_shop_by_domain: &MyApp.Shops.get_shop_by_domain/1
 
     ### 4. Enqueue Jobs from Webhook Controller
 
         def create(conn, %{"topic" => topic} = params) do
+          shop_domain = get_req_header(conn, "x-shopify-shop-domain") |> List.first()
+
           # Verify HMAC
           if NbShopify.verify_webhook_hmac(conn.assigns.raw_body, hmac) do
             # Enqueue job
             %{
               topic: topic,
-              shop_id: shop_id,
+              shop_domain: shop_domain,
               payload: conn.body_params
             }
             |> NbShopify.Workers.WebhookWorker.new()
@@ -77,8 +79,8 @@ if Code.ensure_loaded?(Oban) do
     Required configuration:
 
         config :nb_shopify, :webhook_handler,
-          module: MyApp.ShopifyWebhookHandler,  # Module implementing handle_webhook/3
-          get_shop: &MyApp.Shops.get_shop!/1     # Function to fetch shop by ID
+          module: MyApp.ShopifyWebhookHandler,        # Module implementing handle_webhook/3
+          get_shop_by_domain: &MyApp.Shops.get_shop_by_domain/1  # Function to fetch shop by domain
 
     ## Worker Options
 
@@ -89,7 +91,7 @@ if Code.ensure_loaded?(Oban) do
 
     You can override these when creating jobs:
 
-        %{topic: "products/create", shop_id: 1, payload: %{}}
+        %{topic: "products/create", shop_domain: "example.myshopify.com", payload: %{}}
         |> NbShopify.Workers.WebhookWorker.new(queue: :priority_webhooks, max_attempts: 3)
         |> Oban.insert()
     """
@@ -101,11 +103,13 @@ if Code.ensure_loaded?(Oban) do
     require Logger
 
     @impl Oban.Worker
-    def perform(%Oban.Job{args: %{"topic" => topic, "shop_id" => shop_id, "payload" => payload}}) do
-      Logger.info("Processing webhook: #{topic} for shop #{shop_id}")
+    def perform(%Oban.Job{
+          args: %{"topic" => topic, "shop_domain" => shop_domain, "payload" => payload}
+        }) do
+      Logger.info("Processing webhook: #{topic} for shop #{shop_domain}")
 
       with {:ok, config} <- get_webhook_config(),
-           shop <- config.get_shop.(shop_id) do
+           shop when not is_nil(shop) <- config.get_shop_by_domain.(shop_domain) do
         config.module.handle_webhook(topic, shop, payload)
       else
         {:error, :no_config} ->
@@ -114,6 +118,10 @@ if Code.ensure_loaded?(Oban) do
           )
 
           {:error, :not_configured}
+
+        nil ->
+          Logger.error("Shop not found for domain: #{shop_domain}")
+          {:error, :shop_not_found}
 
         error ->
           Logger.error("Failed to process webhook: #{inspect(error)}")
@@ -128,10 +136,10 @@ if Code.ensure_loaded?(Oban) do
 
         config ->
           module = Keyword.get(config, :module)
-          get_shop = Keyword.get(config, :get_shop)
+          get_shop_by_domain = Keyword.get(config, :get_shop_by_domain)
 
-          if module && get_shop do
-            {:ok, %{module: module, get_shop: get_shop}}
+          if module && get_shop_by_domain do
+            {:ok, %{module: module, get_shop_by_domain: get_shop_by_domain}}
           else
             {:error, :invalid_config}
           end

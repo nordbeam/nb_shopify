@@ -18,6 +18,7 @@ if Code.ensure_loaded?(Igniter) do
         --with-webhooks      Add Oban webhook worker support
         --with-database      Create example Shop schema and context
         --with-cli           Create Shopify CLI config files for `shopify app dev` workflow
+        --proxy              Add Caddy reverse proxy for Vite + Phoenix (recommended with --with-cli)
         --api-version        Shopify API version (default: "2026-01")
         --yes                Skip confirmations
 
@@ -35,6 +36,9 @@ if Code.ensure_loaded?(Igniter) do
         # Full installation with CLI, webhooks, and database
         mix nb_shopify.install --with-cli --with-webhooks --with-database
 
+        # With Caddy proxy for better dev experience
+        mix nb_shopify.install --with-cli --proxy
+
         # Custom API version
         mix nb_shopify.install --api-version "2025-10"
 
@@ -49,17 +53,31 @@ if Code.ensure_loaded?(Igniter) do
        - API version configuration
        - Environment-specific settings (dev/test/prod)
 
-    3. **Router Setup**: Adds Shopify pipelines to your router:
-       - `:shopify_app` pipeline with authentication and frame headers
+    3. **Frontend Dependencies** (if assets/package.json exists):
+       - Adds Shopify npm packages to package.json:
+         - @shopify/app-bridge (embedded app functionality)
+         - @shopify/app-bridge-react (React bindings)
+         - @shopify/polaris (Shopify's design system)
+         - @shopify/app-bridge-types (TypeScript types)
+
+    4. **Router Setup**: Adds Shopify pipelines to your router:
+       - `:shopify_app` pipeline with NbShopifyWeb plugs (library-provided, not generated)
+       - NbShopifyWeb.Plugs.ShopifyFrameHeaders for iframe embedding
+       - NbShopifyWeb.Plugs.ShopifySession for authentication
        - Example routes for Shopify app
 
-    4. **Webhook Support** (--with-webhooks):
-       - Creates webhook worker example
-       - Creates webhook controller
+    4.5. **App Bridge Setup**: Adds App Bridge to root layout:
+       - Shopify API key meta tag (for App Bridge initialization)
+       - App Bridge CDN script (https://cdn.shopify.com/shopifycloud/app-bridge.js)
+       - Conditional rendering based on @shopify_api_key assign
+
+    5. **Webhook Support** (--with-webhooks):
+       - Creates webhook handler in Web namespace
+       - Creates simplified webhook controller (verifies HMAC, enqueues to Oban)
        - Adds webhook routes
        - Configures Oban (if not already configured)
 
-    5. **Database Support** (--with-database):
+    6. **Database Support** (--with-database):
        - Creates Shops context module
        - Creates Shop schema with fields:
          - shop_domain
@@ -68,6 +86,13 @@ if Code.ensure_loaded?(Igniter) do
          - installed_at, uninstalled_at
        - Creates migration
        - Implements CRUD functions for shop management
+
+    7. **Proxy Support** (--proxy):
+       - Creates Caddyfile (reverse proxy for Vite + Phoenix)
+       - Creates dev.sh script (process manager)
+       - Updates shopify.web.toml to use dev.sh
+       - Enables HMR through Shopify CLI tunnel
+       - Note: Requires manual Vite config update (instructions provided)
 
     ## Security Warnings
 
@@ -123,12 +148,14 @@ if Code.ensure_loaded?(Igniter) do
           with_webhooks: :boolean,
           with_database: :boolean,
           with_cli: :boolean,
+          proxy: :boolean,
           api_version: :string,
           yes: :boolean
         ],
         defaults: [
           api_version: "2026-01",
-          with_cli: false
+          with_cli: false,
+          proxy: false
         ],
         positional: [],
         composes: ["deps.get"]
@@ -140,10 +167,13 @@ if Code.ensure_loaded?(Igniter) do
       igniter
       |> add_dependencies()
       |> add_config()
+      |> maybe_add_frontend_dependencies()
       |> setup_router()
+      |> setup_app_bridge_in_layout()
       |> maybe_setup_webhooks()
       |> maybe_setup_database()
       |> maybe_setup_shopify_cli()
+      |> maybe_setup_proxy()
       |> add_security_warnings()
       |> print_next_steps()
     end
@@ -243,6 +273,71 @@ if Code.ensure_loaded?(Igniter) do
       """)
     end
 
+    # Add frontend dependencies if package.json exists
+    defp maybe_add_frontend_dependencies(igniter) do
+      package_json_path = "assets/package.json"
+
+      if File.exists?(package_json_path) do
+        add_shopify_npm_packages(igniter, package_json_path)
+      else
+        igniter
+      end
+    end
+
+    defp add_shopify_npm_packages(igniter, package_json_path) do
+      igniter
+      |> Igniter.update_file(package_json_path, fn source ->
+        content = Rewrite.Source.get(source, :content)
+
+        case Jason.decode(content) do
+          {:ok, json} ->
+            # Add Shopify packages to dependencies
+            dependencies = Map.get(json, "dependencies", %{})
+            dev_dependencies = Map.get(json, "devDependencies", %{})
+
+            updated_dependencies =
+              dependencies
+              |> Map.put("@shopify/app-bridge", "^3.7.10")
+              |> Map.put("@shopify/app-bridge-react", "^4.2.4")
+              |> Map.put("@shopify/polaris", "^13.9.5")
+
+            updated_dev_dependencies =
+              dev_dependencies
+              |> Map.put("@shopify/app-bridge-types", "^0.5.0")
+
+            updated_json =
+              json
+              |> Map.put("dependencies", updated_dependencies)
+              |> Map.put("devDependencies", updated_dev_dependencies)
+
+            case Jason.encode(updated_json, pretty: true) do
+              {:ok, new_content} ->
+                Rewrite.Source.update(source, :content, fn _ -> new_content <> "\n" end)
+
+              _ ->
+                source
+            end
+
+          _ ->
+            source
+        end
+      end)
+      |> Igniter.add_notice("""
+      Added Shopify npm packages to assets/package.json:
+      - @shopify/app-bridge (for embedded app functionality)
+      - @shopify/app-bridge-react (React bindings for App Bridge)
+      - @shopify/polaris (Shopify's design system)
+      - @shopify/app-bridge-types (TypeScript types)
+
+      Run your package manager to install:
+        cd assets && npm install
+      Or:
+        cd assets && bun install
+      Or:
+        cd assets && yarn install
+      """)
+    end
+
     # Setup router with Shopify pipelines and routes
     defp setup_router(igniter) do
       web_module = Igniter.Libs.Phoenix.web_module(igniter)
@@ -253,7 +348,7 @@ if Code.ensure_loaded?(Igniter) do
       session_plug =
         if with_database do
           """
-          plug #{inspect(web_module)}.Plugs.ShopifySession,
+          plug NbShopifyWeb.Plugs.ShopifySession,
             get_shop_by_id: &#{inspect(app_module)}.Shops.get_shop/1,
             get_shop_by_domain: &#{inspect(app_module)}.Shops.get_shop_by_domain/1,
             upsert_shop: &#{inspect(app_module)}.Shops.upsert_shop/1
@@ -261,7 +356,7 @@ if Code.ensure_loaded?(Igniter) do
         else
           """
           # Uncomment and configure when you have a Shop context:
-          # plug #{inspect(web_module)}.Plugs.ShopifySession,
+          # plug NbShopifyWeb.Plugs.ShopifySession,
           #   get_shop_by_id: &YourApp.Shops.get_shop/1,
           #   get_shop_by_domain: &YourApp.Shops.get_shop_by_domain/1,
           #   upsert_shop: &YourApp.Shops.upsert_shop/1
@@ -276,7 +371,7 @@ if Code.ensure_loaded?(Igniter) do
       plug :put_root_layout, html: {#{inspect(web_module)}.Layouts, :root}
       plug :protect_from_forgery
       plug :put_secure_browser_headers
-      plug #{inspect(web_module)}.Plugs.ShopifyFrameHeaders
+      plug NbShopifyWeb.Plugs.ShopifyFrameHeaders
       #{session_plug}
       """
 
@@ -299,22 +394,75 @@ if Code.ensure_loaded?(Igniter) do
           Added Shopify pipelines and routes to your router.
 
           The :shopify_app pipeline includes:
-          - ShopifyFrameHeaders plug for iframe embedding
-          - ShopifySession plug (configured with your Shops context)
+          - NbShopifyWeb.Plugs.ShopifyFrameHeaders for iframe embedding
+          - NbShopifyWeb.Plugs.ShopifySession (configured with your Shops context)
+
+          Note: Plugs are provided by the nb_shopify library, not generated in your app.
           """
         else
           """
           Added Shopify pipelines and routes to your router.
 
           The :shopify_app pipeline includes:
-          - ShopifyFrameHeaders plug for iframe embedding
-          - ShopifySession plug (commented out - configure after setting up Shop context)
+          - NbShopifyWeb.Plugs.ShopifyFrameHeaders for iframe embedding
+          - NbShopifyWeb.Plugs.ShopifySession (commented out - configure after setting up Shop context)
 
+          Note: Plugs are provided by the nb_shopify library, not generated in your app.
           To enable ShopifySession, run with --with-database or manually configure it.
           """
         end
 
       Igniter.add_notice(igniter, notice)
+    end
+
+    # Add App Bridge script and API key to root layout
+    defp setup_app_bridge_in_layout(igniter) do
+      layout_path =
+        "lib/#{Igniter.Project.Application.app_name(igniter)}_web/components/layouts/root.html.heex"
+
+      if File.exists?(layout_path) do
+        igniter
+        |> Igniter.update_file(layout_path, fn source ->
+          content = Rewrite.Source.get(source, :content)
+
+          # Check if App Bridge script is already added
+          if String.contains?(content, "app-bridge.js") do
+            source
+          else
+            # Find the <head> section and add App Bridge setup after CSRF token
+            updated_content =
+              String.replace(
+                content,
+                ~r/(<meta name="csrf-token" content=\{[^}]+\} \/>)/,
+                "\\1\n    <%= if assigns[:shopify_api_key] do %>\n      <meta name=\"shopify-api-key\" content={@shopify_api_key} />\n      <script src=\"https://cdn.shopify.com/shopifycloud/app-bridge.js\">\n      </script>\n    <% end %>"
+              )
+
+            Rewrite.Source.update(source, :content, fn _ -> updated_content end)
+          end
+        end)
+        |> Igniter.add_notice("""
+        Added App Bridge setup to root layout:
+        - Shopify API key meta tag (conditional on @shopify_api_key assign)
+        - App Bridge CDN script (https://cdn.shopify.com/shopifycloud/app-bridge.js)
+
+        The ShopifySession plug will automatically assign @shopify_api_key for you.
+        """)
+      else
+        igniter
+        |> Igniter.add_warning("""
+        Could not find root layout at #{layout_path}
+
+        You may need to manually add App Bridge to your layout:
+
+            <%= if assigns[:shopify_api_key] do %>
+              <meta name="shopify-api-key" content={@shopify_api_key} />
+              <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js">
+              </script>
+            <% end %>
+
+        Place this in the <head> section after the CSRF token meta tag.
+        """)
+      end
     end
 
     # Setup webhooks with Oban worker and controller
@@ -332,8 +480,8 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp create_webhook_handler(igniter) do
-      app_module = Igniter.Project.Application.app_module(igniter)
-      handler_module = Module.concat([app_module, ShopifyWebhookHandler])
+      web_module = Igniter.Libs.Phoenix.web_module(igniter)
+      handler_module = Module.concat([web_module, ShopifyWebhookHandler])
 
       content = """
         @moduledoc \"\"\"
@@ -426,23 +574,22 @@ if Code.ensure_loaded?(Igniter) do
 
     defp create_webhook_controller(igniter) do
       web_module = Igniter.Libs.Phoenix.web_module(igniter)
-      app_module = Igniter.Project.Application.app_module(igniter)
       controller_module = Module.concat([web_module, WebhookController])
 
       content = """
         use #{inspect(web_module)}, :controller
 
         require Logger
-        alias #{inspect(app_module)}.Shops
 
         @doc \"\"\"
         Handles incoming Shopify webhooks.
 
         This endpoint:
         1. Verifies the webhook HMAC
-        2. Looks up the shop by domain
-        3. Enqueues the webhook for background processing
-        4. Returns 200 OK immediately
+        2. Enqueues the webhook for background processing
+        3. Returns 200 OK immediately
+
+        Note: Shop lookup is handled by the background worker for faster response time.
         \"\"\"
         def create(conn, params) do
           # Get required headers
@@ -454,12 +601,11 @@ if Code.ensure_loaded?(Igniter) do
           {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
 
           # Verify webhook authenticity
-          with true <- NbShopify.verify_webhook_hmac(raw_body, hmac),
-               shop when not is_nil(shop) <- Shops.get_shop_by_domain(shop_domain) do
+          if NbShopify.verify_webhook_hmac(raw_body, hmac) do
             # Queue webhook for background processing
             %{
               topic: topic,
-              shop_id: shop.id,
+              shop_domain: shop_domain,
               payload: params
             }
             |> NbShopify.Workers.WebhookWorker.new()
@@ -469,19 +615,11 @@ if Code.ensure_loaded?(Igniter) do
 
             json(conn, %{status: "ok"})
           else
-            false ->
-              Logger.error("Invalid webhook HMAC from \#{shop_domain}")
+            Logger.error("Invalid webhook HMAC from \#{shop_domain}")
 
-              conn
-              |> put_status(:unauthorized)
-              |> json(%{error: "Invalid HMAC"})
-
-            nil ->
-              Logger.error("Shop not found: \#{shop_domain}")
-
-              conn
-              |> put_status(:not_found)
-              |> json(%{error: "Shop not found"})
+            conn
+            |> put_status(:unauthorized)
+            |> json(%{error: "Invalid HMAC"})
           end
         end
       """
@@ -524,15 +662,16 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp configure_webhook_handler(igniter) do
+      web_module = Igniter.Libs.Phoenix.web_module(igniter)
       app_module = Igniter.Project.Application.app_module(igniter)
-      handler_module = Module.concat([app_module, ShopifyWebhookHandler])
+      handler_module = Module.concat([web_module, ShopifyWebhookHandler])
 
       config_code = """
 
       # Webhook handler configuration
       config :nb_shopify, :webhook_handler,
         module: #{inspect(handler_module)},
-        get_shop: &#{inspect(app_module)}.Shops.get_shop/1
+        get_shop_by_domain: &#{inspect(app_module)}.Shops.get_shop_by_domain/1
       """
 
       igniter
@@ -1013,6 +1152,10 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp create_shopify_web_toml(igniter) do
+      with_proxy = igniter.args.options[:proxy]
+
+      dev_command = if with_proxy, do: "./dev.sh", else: "mix phx.server"
+
       content = """
       # Tells Shopify CLI how to run your Phoenix application
       # https://shopify.dev/docs/apps/tools/cli/configuration#web
@@ -1021,7 +1164,7 @@ if Code.ensure_loaded?(Igniter) do
       roles = ["frontend", "backend"]
 
       [commands]
-      dev = "mix phx.server"
+      dev = "#{dev_command}"
       """
 
       Igniter.create_new_file(igniter, "shopify.web.toml", content, on_exists: :skip)
@@ -1082,6 +1225,129 @@ if Code.ensure_loaded?(Igniter) do
       Igniter.create_new_file(igniter, ".env.example", content, on_exists: :skip)
     end
 
+    # Setup Caddy reverse proxy for Vite + Phoenix
+    defp maybe_setup_proxy(igniter) do
+      if igniter.args.options[:proxy] do
+        igniter
+        |> create_caddyfile()
+        |> create_dev_script()
+        |> add_proxy_notices()
+      else
+        igniter
+      end
+    end
+
+    defp create_caddyfile(igniter) do
+      content = """
+      :{$CADDY_PORT:3000} {
+      \t# Proxy all Vite requests (everything under /_vite/)
+      \thandle /_vite/* {
+      \t\treverse_proxy 127.0.0.1:5173
+      \t}
+
+      \t# All other requests go to Phoenix (includes WebSocket for LiveView)
+      \thandle {
+      \t\treverse_proxy 127.0.0.1:4000
+      \t}
+
+      \t# Enable CORS for Shopify embedded apps
+      \theader {
+      \t\tAccess-Control-Allow-Origin *
+      \t\tAccess-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+      \t\tAccess-Control-Allow-Headers "Content-Type, Authorization"
+      \t}
+
+      \t# Disable access logs
+      \tlog {
+      \t\toutput discard
+      \t}
+      }
+      """
+
+      Igniter.create_new_file(igniter, "Caddyfile", content, on_exists: :skip)
+    end
+
+    defp create_dev_script(igniter) do
+      content = """
+      #!/bin/bash
+
+      # Shopify CLI sets PORT to a random value
+      # Caddy should listen on that port, Phoenix on fixed 4000
+      export CADDY_PORT=${PORT:-3000}
+      export PORT=4000
+
+      # Create a new process group so we can kill all children together
+      set -m
+
+      # Cleanup function to kill all child processes
+      cleanup() {
+          echo "Cleaning up processes..."
+          # Kill all processes in this process group
+          kill 0 2>/dev/null
+          exit
+      }
+
+      # Trap SIGINT, SIGTERM, and EXIT
+      trap cleanup SIGINT SIGTERM EXIT
+
+      # Start Caddy in the background
+      caddy run &
+      CADDY_PID=$!
+
+      # Start Phoenix on port 4000 (this blocks)
+      # Use exec to replace the shell with Phoenix, so it receives signals directly
+      exec mix phx.server
+      """
+
+      igniter
+      |> Igniter.create_new_file("dev.sh", content, on_exists: :skip)
+      |> then(fn igniter ->
+        # Make dev.sh executable
+        Igniter.add_task(igniter, fn ->
+          File.chmod("dev.sh", 0o755)
+          :ok
+        end)
+      end)
+    end
+
+    defp add_proxy_notices(igniter) do
+      igniter
+      |> Igniter.add_notice("""
+      Created Caddy reverse proxy setup:
+      - Caddyfile: Proxies /_vite/* to Vite (5173), everything else to Phoenix (4000)
+      - dev.sh: Process manager that starts Caddy + Phoenix together
+
+      Architecture:
+        Shopify CLI → Caddy (port from $PORT or 3000) → Vite (5173) / Phoenix (4000)
+
+      To use:
+      1. Install Caddy: https://caddyserver.com/docs/install
+      2. Run: shopify app dev (or ./dev.sh directly)
+
+      IMPORTANT: You must manually update your Vite config for this setup:
+
+      In assets/vite.config.js (or .ts), update the server config:
+
+      export default defineConfig({
+        base: '/_vite/', // Prefix all Vite assets with /_vite for easy proxying
+        server: {
+          host: process.env.VITE_HOST || "127.0.0.1",
+          port: parseInt(process.env.VITE_PORT || "5173"),
+          strictPort: true,
+          origin: '', // Use relative URLs for assets (works through Caddy proxy and Shopify tunnel)
+          allowedHosts: true, // Allow all hosts (needed for dynamic Cloudflare tunnel URLs)
+          // HMR auto-detects WebSocket URL from page URL (works with Shopify's HTTPS tunnel)
+        },
+        // ... rest of your config
+      })
+
+      This configuration enables:
+      - HMR through Caddy reverse proxy
+      - HMR through Shopify CLI's Cloudflare tunnel
+      - Single entry point for all requests
+      """)
+    end
+
     # Add security warnings
     defp add_security_warnings(igniter) do
       Igniter.add_warning(igniter, """
@@ -1109,6 +1375,45 @@ if Code.ensure_loaded?(Igniter) do
 
       {base_steps, step_counter} =
         if igniter.args.options[:with_cli] do
+          proxy_info =
+            if igniter.args.options[:proxy] do
+              """
+
+                 Note: With --proxy, this will run ./dev.sh which:
+                 - Starts Caddy reverse proxy (routing to Phoenix + Vite)
+                 - Enables HMR through the Cloudflare tunnel
+              """
+            else
+              ""
+            end
+
+          vite_step =
+            if igniter.args.options[:proxy] do
+              """
+
+              #{step_counter.count + 1}. Update your Vite config (REQUIRED for --proxy):
+                 See the notice above for the exact Vite config changes needed.
+                 This enables HMR through Caddy and the Shopify tunnel.
+
+              #{step_counter.count + 2}. #{if igniter.args.options[:with_database], do: "Review", else: "Configure"} your router configuration:
+                 #{if igniter.args.options[:with_database] do
+                "- NbShopifyWeb.Plugs.ShopifySession is configured with Shops context\n             - Customize routes as needed"
+              else
+                "- Configure NbShopifyWeb.Plugs.ShopifySession callbacks if needed\n             - Customize routes as needed"
+              end}
+              """
+            else
+              """
+
+              #{step_counter.count + 1}. #{if igniter.args.options[:with_database], do: "Review", else: "Configure"} your router configuration:
+                 #{if igniter.args.options[:with_database] do
+                "- NbShopifyWeb.Plugs.ShopifySession is configured with Shops context\n             - Customize routes as needed"
+              else
+                "- Configure NbShopifyWeb.Plugs.ShopifySession callbacks if needed\n             - Customize routes as needed"
+              end}
+              """
+            end
+
           steps = """
           NbShopify has been installed successfully!
 
@@ -1121,24 +1426,19 @@ if Code.ensure_loaded?(Igniter) do
 
              # Start development with automatic tunnels and env injection
              shopify app dev
-
+          #{proxy_info}
              This will:
              - Start a Cloudflare tunnel automatically
              - Inject SHOPIFY_API_KEY and SHOPIFY_API_SECRET
              - Update Partner Dashboard URLs automatically
-             - Run mix phx.server
+             - Run #{if igniter.args.options[:proxy], do: "./dev.sh (Caddy + Phoenix)", else: "mix phx.server"}
 
              For manual setup without CLI, see .env.example
-
-          #{step_counter.count + 1}. #{if igniter.args.options[:with_database], do: "Review", else: "Configure"} your router configuration:
-             #{if igniter.args.options[:with_database] do
-            "- ShopifySession plug is already configured with Shops context\n             - Customize routes as needed"
-          else
-            "- Configure ShopifySession plug callbacks if needed\n             - Customize routes as needed"
-          end}
+          #{vite_step}
           """
 
-          {steps, %{count: step_counter.count + 2}}
+          increment = if igniter.args.options[:proxy], do: 3, else: 2
+          {steps, %{count: step_counter.count + increment}}
         else
           steps = """
           NbShopify has been installed successfully!
@@ -1182,7 +1482,7 @@ if Code.ensure_loaded?(Igniter) do
              - Subscribe to required topics (e.g., app/uninstalled, products/create)
 
           #{step_counter.count + 1}. Implement webhook handlers:
-             - Edit ShopifyWebhookHandler module
+             - Edit <AppWeb>.ShopifyWebhookHandler module
              - Add your business logic for each webhook topic
           """
 
@@ -1191,10 +1491,17 @@ if Code.ensure_loaded?(Igniter) do
           {"", step_counter}
         end
 
+      start_command =
+        cond do
+          igniter.args.options[:with_cli] -> "shopify app dev"
+          igniter.args.options[:proxy] -> "./dev.sh"
+          true -> "mix phx.server"
+        end
+
       final_steps = """
 
       #{step_counter.count}. Start your Phoenix server:
-         #{if igniter.args.options[:with_cli], do: "shopify app dev", else: "mix phx.server"}
+         #{start_command}
 
       ## Documentation:
 

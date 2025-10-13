@@ -5,12 +5,18 @@ defmodule NbShopifyWeb.Plugs.ShopifySession do
 
   ## How It Works
 
-  1. Check for existing session (returning users)
-  2. If no session, look for session token (id_token param or Authorization header)
-  3. Validate session token (JWT)
-  4. Exchange session token for access token
-  5. Call provided callbacks to save shop
-  6. Assign shop to conn
+  1. Assigns Shopify API key to conn for App Bridge initialization
+  2. Check for existing session (returning users)
+  3. If no session, look for session token (id_token param or Authorization header)
+  4. Validate session token (JWT)
+  5. Exchange session token for access token
+  6. Call provided callbacks to save shop
+  7. Assign shop to conn
+
+  ## Assigns
+
+  - `@shopify_api_key` - The Shopify API key from config (for App Bridge)
+  - `@shop` - The shop struct from the database
 
   ## Configuration
 
@@ -75,6 +81,9 @@ defmodule NbShopifyWeb.Plugs.ShopifySession do
 
   def call(conn, opts) do
     get_shop_by_id = Keyword.fetch!(opts, :get_shop_by_id)
+
+    # Assign Shopify API key for App Bridge initialization
+    conn = assign(conn, :shopify_api_key, Application.get_env(:nb_shopify, :api_key))
 
     # Try session-based auth first (for returning visits)
     case get_session(conn, :shop_id) do
