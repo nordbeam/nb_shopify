@@ -495,10 +495,20 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     # Check if max_header_count is already in the file
-    defp has_max_header_count?(zipper) do
-      zipper
-      |> Sourceror.Zipper.root()
-      |> Sourceror.Zipper.node()
+    defp has_max_header_count?(ast_or_zipper) do
+      # Handle both raw AST and zipper - Igniter.update_elixir_file may pass either
+      node =
+        case ast_or_zipper do
+          %Sourceror.Zipper{} = zipper ->
+            zipper
+            |> Sourceror.Zipper.root()
+            |> Sourceror.Zipper.node()
+
+          ast ->
+            ast
+        end
+
+      node
       |> Macro.postwalk(false, fn
         {:max_header_count, _, _}, _acc -> {:max_header_count, true}
         node, acc -> {node, acc}
