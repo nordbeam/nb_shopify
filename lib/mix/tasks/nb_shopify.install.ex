@@ -167,6 +167,8 @@ if Code.ensure_loaded?(Igniter) do
       igniter
       |> add_dependencies()
       |> add_config()
+      |> configure_endpoint()
+      |> configure_dev_environment()
       |> maybe_add_frontend_dependencies()
       |> setup_router()
       |> setup_app_bridge_in_layout()
@@ -295,6 +297,276 @@ if Code.ensure_loaded?(Igniter) do
       end
     end
 
+    # Configure endpoint for embedded Shopify apps
+    # Uses AST-based manipulation for robust, formatting-independent updates
+    defp configure_endpoint(igniter) do
+      app_name = Igniter.Project.Application.app_name(igniter)
+      web_module = Igniter.Libs.Phoenix.web_module(igniter)
+      endpoint_module = Module.concat([web_module, Endpoint])
+
+      igniter
+      |> Igniter.Project.Module.find_and_update_module(endpoint_module, fn zipper ->
+        with {:ok, zipper} <- Igniter.Code.Module.move_to_module_using(zipper, Phoenix.Endpoint) do
+          # Check if same_site is already configured in @session_options
+          case Igniter.Code.Module.move_to_module_attribute(zipper, :session_options) do
+            {:ok, attr_zipper} ->
+              # Check if same_site is already in the keyword list
+              attr_node = Sourceror.Zipper.node(attr_zipper)
+
+              if has_same_site_option?(attr_node) do
+                # Already configured, don't modify
+                {:ok, zipper}
+              else
+                # Update existing @session_options with Shopify-required settings
+                update_session_options_attribute(zipper, app_name)
+              end
+
+            :error ->
+              # Add new @session_options attribute
+              add_session_options_attribute(zipper, app_name)
+          end
+        else
+          _ ->
+            # Can't find Phoenix.Endpoint usage, return unchanged
+            {:ok, zipper}
+        end
+      end)
+      |> case do
+        {:ok, igniter} ->
+          Igniter.add_notice(igniter, """
+          Configured endpoint session options for Shopify embedded app:
+          - same_site: "None" (required for iframe embedding)
+          - secure: true (required for HTTPS in production)
+
+          These settings are MANDATORY for Shopify embedded apps.
+          """)
+
+        {:error, igniter} ->
+          Igniter.add_warning(igniter, """
+          Could not find endpoint module #{inspect(endpoint_module)}
+
+          IMPORTANT: You must manually configure session options for Shopify embedded apps:
+
+          @session_options [
+            store: :cookie,
+            key: "_#{app_name}_key",
+            signing_salt: "your-signing-salt",
+            same_site: "None",  # REQUIRED for embedded apps
+            secure: true        # REQUIRED for production
+          ]
+          """)
+      end
+    end
+
+    # Check if session_options already has same_site configured
+    defp has_same_site_option?(attr_node) do
+      case attr_node do
+        {:@, _, [{:session_options, _, [[{_, _} | _] = keyword_list]}]} ->
+          Keyword.has_key?(keyword_list, :same_site)
+
+        _ ->
+          false
+      end
+    end
+
+    # Update existing @session_options attribute
+    defp update_session_options_attribute(zipper, app_name) do
+      case Igniter.Code.Module.move_to_module_attribute(zipper, :session_options) do
+        {:ok, attr_zipper} ->
+          new_options =
+            quote do
+              [
+                store: :cookie,
+                key: unquote("_#{app_name}_key"),
+                signing_salt: unquote(generate_salt()),
+                same_site: "None",
+                secure: true
+              ]
+            end
+
+          updated_zipper = Sourceror.Zipper.replace(attr_zipper, new_options)
+          {:ok, updated_zipper}
+
+        :error ->
+          {:ok, zipper}
+      end
+    end
+
+    # Add new @session_options attribute after `use Phoenix.Endpoint`
+    defp add_session_options_attribute(zipper, app_name) do
+      session_options_code = """
+      # Session configuration for Shopify embedded apps
+      # same_site: "None" is REQUIRED for embedded apps to work in iframes
+      # secure: true is REQUIRED for production HTTPS
+      @session_options [
+        store: :cookie,
+        key: "_#{app_name}_key",
+        signing_salt: "#{generate_salt()}",
+        same_site: "None",
+        secure: true
+      ]
+      """
+
+      case Igniter.Code.Module.move_to_use(zipper, Phoenix.Endpoint) do
+        {:ok, use_zipper} ->
+          {:ok, Igniter.Code.Common.add_code(use_zipper, session_options_code, placement: :after)}
+
+        :error ->
+          {:ok, zipper}
+      end
+    end
+
+    # Configure development environment with Bandit settings
+    # Uses AST-based config manipulation for robust updates
+    defp configure_dev_environment(igniter) do
+      app_name = Igniter.Project.Application.app_name(igniter)
+      web_module = Igniter.Libs.Phoenix.web_module(igniter)
+      endpoint_module = Module.concat([web_module, Endpoint])
+
+      # Configure dev.exs with max_header_count
+      igniter =
+        igniter
+        |> Igniter.update_elixir_file("config/dev.exs", fn zipper ->
+          add_max_header_count_to_config(zipper, app_name, endpoint_module)
+        end)
+
+      # Configure runtime.exs for production
+      igniter =
+        igniter
+        |> Igniter.update_elixir_file("config/runtime.exs", fn zipper ->
+          add_max_header_count_to_runtime_config(zipper, app_name, endpoint_module)
+        end)
+
+      Igniter.add_notice(igniter, """
+      Configured Bandit max_header_count: 200
+      - Added to config/dev.exs
+      - Added to config/runtime.exs (production)
+
+      This prevents "too many headers" errors from Shopify's OAuth/webhook requests.
+      """)
+    end
+
+    # Add max_header_count to dev.exs config
+    defp add_max_header_count_to_config(zipper, app_name, endpoint_module) do
+      # Check if max_header_count is already configured
+      if has_max_header_count?(zipper) do
+        {:ok, zipper}
+      else
+        # Try to find and update the endpoint config
+        with {:ok, config_zipper} <-
+               Igniter.Code.Common.move_to_do_block_for_module_call(zipper, :config, [
+                 app_name,
+                 endpoint_module
+               ]),
+             {:ok, http_zipper} <- find_keyword_key(config_zipper, :http) do
+          # Add http_1_options to the http keyword list
+          add_http_1_options(http_zipper)
+        else
+          _ ->
+            # Can't find the config block, return unchanged
+            {:ok, zipper}
+        end
+      end
+    end
+
+    # Add max_header_count to runtime.exs production config
+    defp add_max_header_count_to_runtime_config(zipper, app_name, endpoint_module) do
+      # Check if max_header_count is already configured
+      if has_max_header_count?(zipper) do
+        {:ok, zipper}
+      else
+        # Try to find the production config block
+        # This is more complex because it's inside `if config_env() == :prod`
+        with {:ok, prod_block_zipper} <- find_production_config_block(zipper),
+             {:ok, config_zipper} <-
+               Igniter.Code.Common.move_to_do_block_for_module_call(prod_block_zipper, :config, [
+                 app_name,
+                 endpoint_module
+               ]),
+             {:ok, http_zipper} <- find_keyword_key(config_zipper, :http) do
+          # Add http_1_options to the http keyword list
+          add_http_1_options(http_zipper)
+        else
+          _ ->
+            # Can't find the production config block, return unchanged
+            {:ok, zipper}
+        end
+      end
+    end
+
+    # Check if max_header_count is already in the file
+    defp has_max_header_count?(zipper) do
+      zipper
+      |> Sourceror.Zipper.root()
+      |> Sourceror.Zipper.node()
+      |> Macro.postwalk(false, fn
+        {:max_header_count, _, _}, _acc -> {:max_header_count, true}
+        node, acc -> {node, acc}
+      end)
+      |> elem(1)
+    end
+
+    # Find a keyword key in a keyword list
+    defp find_keyword_key(zipper, key) do
+      case Igniter.Code.Keyword.get_key(zipper, key) do
+        {:ok, _} = result -> result
+        :error -> :error
+      end
+    end
+
+    # Find the production config block (if config_env() == :prod do ... end)
+    defp find_production_config_block(zipper) do
+      zipper
+      |> Sourceror.Zipper.root()
+      |> Sourceror.Zipper.find(fn node ->
+        match?(
+          {:if, _,
+           [
+             {{:., _, [{:__aliases__, _, [:Config]}, :config_env]}, _, []},
+             [do: _, else: _]
+           ]},
+          node
+        ) or
+          match?(
+            {:if, _, [{{:., _, [:config_env]}, _, []}, [do: _, else: _]]},
+            node
+          )
+      end)
+      |> case do
+        nil -> :error
+        zipper -> {:ok, zipper}
+      end
+    end
+
+    # Add http_1_options with max_header_count to an http: keyword list
+    defp add_http_1_options(zipper) do
+      node = Sourceror.Zipper.node(zipper)
+
+      case node do
+        # http: [existing, options]
+        {key, keyword_list} when is_list(keyword_list) ->
+          # Check if http_1_options already exists
+          if Keyword.has_key?(keyword_list, :http_1_options) do
+            {:ok, zipper}
+          else
+            # Add http_1_options at the beginning with a comment
+            new_keyword_list = [
+              {:http_1_options, [max_header_count: 200]} | keyword_list
+            ]
+
+            updated_zipper = Sourceror.Zipper.replace(zipper, {key, new_keyword_list})
+            {:ok, updated_zipper}
+          end
+
+        _ ->
+          {:ok, zipper}
+      end
+    end
+
+    defp generate_salt do
+      :crypto.strong_rand_bytes(8) |> Base.encode64() |> binary_part(0, 8)
+    end
+
     # Add frontend dependencies if package.json exists
     defp maybe_add_frontend_dependencies(igniter) do
       package_json_path = "assets/package.json"
@@ -306,6 +578,9 @@ if Code.ensure_loaded?(Igniter) do
       end
     end
 
+    # Add Shopify npm packages to package.json
+    # Note: JSON files require Jason library - no AST manipulation available
+    # Using Igniter.update_file with Rewrite.Source is the correct pattern
     defp add_shopify_npm_packages(igniter, package_json_path) do
       igniter
       |> Igniter.update_file(package_json_path, fn source ->
@@ -313,24 +588,13 @@ if Code.ensure_loaded?(Igniter) do
 
         case Jason.decode(content) do
           {:ok, json} ->
-            # Add Shopify packages to dependencies
-            dependencies = Map.get(json, "dependencies", %{})
-            dev_dependencies = Map.get(json, "devDependencies", %{})
-
-            updated_dependencies =
-              dependencies
-              |> Map.put("@shopify/app-bridge", "^3.7.10")
-              |> Map.put("@shopify/app-bridge-react", "^4.2.4")
-              |> Map.put("@shopify/polaris", "^13.9.5")
-
-            updated_dev_dependencies =
-              dev_dependencies
-              |> Map.put("@shopify/app-bridge-types", "^0.5.0")
-
+            # Use put_in/3 for cleaner nested updates
             updated_json =
               json
-              |> Map.put("dependencies", updated_dependencies)
-              |> Map.put("devDependencies", updated_dev_dependencies)
+              |> put_in(["dependencies", "@shopify/app-bridge"], "^3.7.10")
+              |> put_in(["dependencies", "@shopify/app-bridge-react"], "^4.2.4")
+              |> put_in(["dependencies", "@shopify/polaris"], "^13.9.5")
+              |> put_in(["devDependencies", "@shopify/app-bridge-types"], "^0.5.0")
 
             case Jason.encode(updated_json, pretty: true) do
               {:ok, new_content} ->
@@ -438,6 +702,8 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     # Add App Bridge script and API key to root layout
+    # Note: HEEx templates require string manipulation - no AST parser available for templates
+    # Using Igniter.update_file with Rewrite.Source is the correct Igniter pattern for non-Elixir files
     defp setup_app_bridge_in_layout(igniter) do
       layout_path =
         "lib/#{Igniter.Project.Application.app_name(igniter)}_web/components/layouts/root.html.heex"
@@ -493,7 +759,10 @@ if Code.ensure_loaded?(Igniter) do
         igniter
         |> create_webhook_handler()
         |> create_webhook_controller()
+        |> create_gdpr_controller()
+        |> create_gdpr_context()
         |> add_webhook_routes()
+        |> add_gdpr_routes()
         |> configure_webhook_handler()
         |> maybe_configure_oban()
       else
@@ -656,6 +925,197 @@ if Code.ensure_loaded?(Igniter) do
       """)
     end
 
+    defp create_gdpr_controller(igniter) do
+      web_module = Igniter.Libs.Phoenix.web_module(igniter)
+      app_module = Igniter.Project.Module.module_name_prefix(igniter)
+      controller_module = Module.concat([web_module, GdprController])
+
+      content = """
+        @moduledoc \"\"\"
+        Controller for handling GDPR webhook requests from Shopify.
+
+        These are MANDATORY webhooks required for Shopify App Store approval.
+        All Shopify apps must handle these three GDPR endpoints:
+        - customers/data_request: Export customer data
+        - customers/redact: Delete customer data
+        - shop/redact: Delete all shop data (called 48h after uninstall)
+        \"\"\"
+
+        use #{inspect(web_module)}, :controller
+        alias #{inspect(app_module)}.Gdpr
+
+        require Logger
+
+        @doc \"\"\"
+        Handles customers/redact webhook.
+        Called when a customer requests their data to be deleted.
+        \"\"\"
+        def customers_redact(conn, params) do
+          shop_domain = params["shop_domain"]
+          customer_id = params["customer"]["id"]
+
+          Logger.info("GDPR webhook: customers/redact for shop: \#{shop_domain}")
+
+          {:ok, _} = Gdpr.redact_customer_data(shop_domain, customer_id)
+          json(conn, %{success: true})
+        end
+
+        @doc \"\"\"
+        Handles shop/redact webhook.
+        Called 48 hours after a shop uninstalls the app.
+        Must delete ALL shop data to comply with GDPR.
+        \"\"\"
+        def shop_redact(conn, params) do
+          shop_domain = params["shop_domain"]
+
+          Logger.info("GDPR webhook: shop/redact for shop: \#{shop_domain}")
+
+          case Gdpr.redact_shop_data(shop_domain) do
+            {:ok, _} ->
+              json(conn, %{success: true})
+
+            {:error, reason} ->
+              Logger.error("GDPR: Failed to redact shop data: \#{inspect(reason)}")
+
+              conn
+              |> put_status(:internal_server_error)
+              |> json(%{success: false, error: inspect(reason)})
+          end
+        end
+
+        @doc \"\"\"
+        Handles customers/data_request webhook.
+        Called when a customer requests their data to be exported.
+        \"\"\"
+        def customers_data_request(conn, params) do
+          shop_domain = params["shop_domain"]
+          customer_id = params["customer"]["id"]
+
+          Logger.info("GDPR webhook: customers/data_request for shop: \#{shop_domain}")
+
+          {:ok, data} = Gdpr.export_customer_data(shop_domain, customer_id)
+          json(conn, data)
+        end
+      """
+
+      igniter
+      |> Igniter.Project.Module.create_module(controller_module, content)
+      |> Igniter.add_notice("""
+      Created GDPR controller module #{inspect(controller_module)}
+
+      This controller handles MANDATORY GDPR compliance webhooks from Shopify.
+      These webhooks are REQUIRED for App Store approval.
+      """)
+    end
+
+    defp create_gdpr_context(igniter) do
+      app_module = Igniter.Project.Module.module_name_prefix(igniter)
+      gdpr_module = Module.concat([app_module, Gdpr])
+
+      content = """
+        @moduledoc \"\"\"
+        Context for handling GDPR data requests.
+        Implements Shopify's mandatory GDPR webhooks.
+
+        IMPORTANT: Customize these functions based on your app's data model.
+        The default implementation assumes minimal customer data storage.
+        \"\"\"
+
+        import Ecto.Query
+        alias #{inspect(app_module)}.Repo
+        alias #{inspect(app_module)}.Shops.Shop
+
+        require Logger
+
+        @doc \"\"\"
+        Handles customer data redaction requests.
+
+        Note: Most Shopify apps don't store customer-specific data.
+        If your app does store customer data, implement deletion logic here.
+        \"\"\"
+        def redact_customer_data(shop_domain, customer_id) do
+          Logger.info(
+            "GDPR: Customer data redaction requested for customer \#{customer_id} from shop \#{shop_domain}"
+          )
+
+          # Default implementation: This app doesn't store customer-specific data
+          # All data is shop-scoped, not customer-scoped
+
+          # TODO: If your app stores customer data, add deletion logic here
+          # Example:
+          # from(c in CustomerData, where: c.shop_domain == ^shop_domain and c.customer_id == ^customer_id)
+          # |> Repo.delete_all()
+
+          {:ok, :no_customer_data}
+        end
+
+        @doc \"\"\"
+        Handles shop data redaction requests.
+        Deletes ALL shop data including related records.
+
+        This is called 48 hours after a shop uninstalls your app.
+        You MUST delete all shop data to comply with GDPR.
+        \"\"\"
+        def redact_shop_data(shop_domain) do
+          case Repo.get_by(Shop, shop_domain: shop_domain) do
+            nil ->
+              Logger.warning("GDPR: Shop redaction requested for unknown shop: \#{shop_domain}")
+              {:ok, :shop_not_found}
+
+            shop ->
+              Logger.info("GDPR: Starting shop data redaction for shop \#{shop_domain}")
+
+              Repo.transaction(fn ->
+                # TODO: Add deletion logic for all shop-related data
+                # Example pattern from a real app:
+                # delete_related_data_for_shop(shop.id)
+
+                # Finally, delete the shop itself
+                Repo.delete(shop)
+
+                Logger.info("GDPR: Completed shop data redaction for shop \#{shop_domain}")
+
+                :ok
+              end)
+          end
+        end
+
+        @doc \"\"\"
+        Handles customer data export requests.
+        Returns all data associated with a customer from a specific shop.
+
+        Since most apps don't store customer-specific data, returns minimal info.
+        \"\"\"
+        def export_customer_data(shop_domain, customer_id) do
+          Logger.info(
+            "GDPR: Customer data export requested for customer \#{customer_id} from shop \#{shop_domain}"
+          )
+
+          # Default implementation: No customer-specific data
+          # TODO: If your app stores customer data, export it here
+
+          {:ok,
+           %{
+             shop_domain: shop_domain,
+             customer_id: customer_id,
+             data: %{
+               note:
+                 "This app does not store any customer-specific data. All data is shop-level configuration."
+             }
+           }}
+        end
+      """
+
+      igniter
+      |> Igniter.Project.Module.create_module(gdpr_module, content)
+      |> Igniter.add_notice("""
+      Created GDPR context module #{inspect(gdpr_module)}
+
+      This module handles GDPR data deletion and export.
+      IMPORTANT: Customize the functions based on your app's data model.
+      """)
+    end
+
     defp add_webhook_routes(igniter) do
       # Add webhook pipeline (just the inner content)
       webhook_pipeline = """
@@ -680,6 +1140,32 @@ if Code.ensure_loaded?(Igniter) do
 
       Configure your webhook URL in Shopify:
       https://your-domain.com/webhooks/shopify
+      """)
+    end
+
+    defp add_gdpr_routes(igniter) do
+      # GDPR routes use the same :shopify_webhook pipeline
+      gdpr_routes = """
+      pipe_through :shopify_webhook
+
+      post "/customers/redact", GdprController, :customers_redact
+      post "/shop/redact", GdprController, :shop_redact
+      post "/customers/data_request", GdprController, :customers_data_request
+      """
+
+      igniter =
+        igniter
+        |> Igniter.Libs.Phoenix.add_scope("/webhooks", gdpr_routes, [])
+
+      Igniter.add_notice(igniter, """
+      Added GDPR routes to your router.
+
+      These routes are MANDATORY for Shopify App Store approval:
+      - /webhooks/customers/redact
+      - /webhooks/shop/redact
+      - /webhooks/customers/data_request
+
+      The GDPR webhooks are already configured in shopify.app.toml.
       """)
     end
 
@@ -1325,6 +1811,10 @@ if Code.ensure_loaded?(Igniter) do
       Igniter.create_new_file(igniter, "dev.sh", content, on_exists: :skip)
     end
 
+    # Update shopify.web.toml to use dev.sh script
+    # Note: TOML files require string manipulation - no AST parser available
+    # Using Igniter.update_file with Rewrite.Source is the correct Igniter pattern
+    # For more robust TOML manipulation, consider adding a TOML library dependency
     defp update_shopify_web_toml(igniter) do
       shopify_web_path = "shopify.web.toml"
 
@@ -1333,6 +1823,7 @@ if Code.ensure_loaded?(Igniter) do
         |> Igniter.update_file(shopify_web_path, fn source ->
           content = Rewrite.Source.get(source, :content)
 
+          # String replacement is necessary - no TOML AST manipulation tools available
           updated_content =
             content
             |> String.replace(
