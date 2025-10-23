@@ -587,7 +587,7 @@ if Code.ensure_loaded?(Igniter) do
       igniter =
         igniter
         |> Igniter.Libs.Phoenix.add_pipeline(:shopify_app, pipeline_code, [])
-        |> Igniter.Libs.Phoenix.add_scope("/", routes_code, [])
+        |> Igniter.Libs.Phoenix.add_scope("/", routes_code, alias: web_module)
 
       notice =
         if with_database do
@@ -936,7 +936,7 @@ if Code.ensure_loaded?(Igniter) do
         The default implementation assumes minimal customer data storage.
         \"\"\"
 
-        import Ecto.Query
+        # import Ecto.Query  # Uncomment when adding custom query logic
         alias #{inspect(app_module)}.Repo
         alias #{inspect(app_module)}.Shops.Shop
 
@@ -1032,6 +1032,8 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp add_webhook_routes(igniter) do
+      web_module = Igniter.Libs.Phoenix.web_module(igniter)
+
       # Add webhook pipeline (just the inner content)
       webhook_pipeline = """
       plug :accepts, ["json"]
@@ -1048,7 +1050,7 @@ if Code.ensure_loaded?(Igniter) do
       igniter =
         igniter
         |> Igniter.Libs.Phoenix.add_pipeline(:shopify_webhook, webhook_pipeline, [])
-        |> Igniter.Libs.Phoenix.add_scope("/webhooks", webhook_routes, [])
+        |> Igniter.Libs.Phoenix.add_scope("/webhooks", webhook_routes, alias: web_module)
 
       Igniter.add_notice(igniter, """
       Added webhook routes to your router.
@@ -1059,6 +1061,8 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp add_gdpr_routes(igniter) do
+      web_module = Igniter.Libs.Phoenix.web_module(igniter)
+
       # GDPR routes use the same :shopify_webhook pipeline
       gdpr_routes = """
       pipe_through :shopify_webhook
@@ -1070,7 +1074,7 @@ if Code.ensure_loaded?(Igniter) do
 
       igniter =
         igniter
-        |> Igniter.Libs.Phoenix.add_scope("/webhooks", gdpr_routes, [])
+        |> Igniter.Libs.Phoenix.add_scope("/webhooks", gdpr_routes, alias: web_module)
 
       Igniter.add_notice(igniter, """
       Added GDPR routes to your router.
