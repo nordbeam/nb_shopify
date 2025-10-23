@@ -308,7 +308,7 @@ if Code.ensure_loaded?(Igniter) do
       |> Igniter.Project.Module.find_and_update_module(endpoint_module, fn zipper ->
         with {:ok, zipper} <- Igniter.Code.Module.move_to_module_using(zipper, Phoenix.Endpoint) do
           # Check if same_site is already configured in @session_options
-          case Igniter.Code.Module.move_to_module_attribute(zipper, :session_options) do
+          case Igniter.Code.Module.move_to_attribute_definition(zipper, :session_options) do
             {:ok, attr_zipper} ->
               # Check if same_site is already in the keyword list
               attr_node = Sourceror.Zipper.node(attr_zipper)
@@ -371,7 +371,7 @@ if Code.ensure_loaded?(Igniter) do
 
     # Update existing @session_options attribute
     defp update_session_options_attribute(zipper, app_name) do
-      case Igniter.Code.Module.move_to_module_attribute(zipper, :session_options) do
+      case Igniter.Code.Module.move_to_attribute_definition(zipper, :session_options) do
         {:ok, attr_zipper} ->
           new_options =
             quote do
