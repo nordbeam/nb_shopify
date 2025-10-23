@@ -417,7 +417,7 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     # Configure development environment with Bandit settings
-    # Uses AST-based config manipulation for robust updates
+    # Note: Uses string manipulation - no AST parser available for config files with complex structures
     defp configure_dev_environment(igniter) do
       app_name = Igniter.Project.Application.app_name(igniter)
       web_module = Igniter.Libs.Phoenix.web_module(igniter)
@@ -426,15 +426,47 @@ if Code.ensure_loaded?(Igniter) do
       # Configure dev.exs with max_header_count
       igniter =
         igniter
-        |> Igniter.update_elixir_file("config/dev.exs", fn zipper ->
-          add_max_header_count_to_config(zipper, app_name, endpoint_module)
+        |> Igniter.update_file("config/dev.exs", fn source ->
+          content = Rewrite.Source.get(source, :content)
+
+          # Skip if already configured
+          if String.contains?(content, "http_1_options") ||
+               String.contains?(content, "max_header_count") do
+            source
+          else
+            # Add http_1_options to the http config for the endpoint
+            updated_content =
+              String.replace(
+                content,
+                ~r/(config\s+:#{app_name},\s+#{inspect(endpoint_module)}[^[]*\[.*?http:\s*\[)/s,
+                "\\1http_1_options: [max_header_count: 200], "
+              )
+
+            Rewrite.Source.update(source, :content, fn _ -> updated_content end)
+          end
         end)
 
       # Configure runtime.exs for production
       igniter =
         igniter
-        |> Igniter.update_elixir_file("config/runtime.exs", fn zipper ->
-          add_max_header_count_to_runtime_config(zipper, app_name, endpoint_module)
+        |> Igniter.update_file("config/runtime.exs", fn source ->
+          content = Rewrite.Source.get(source, :content)
+
+          # Skip if already configured
+          if String.contains?(content, "http_1_options") ||
+               String.contains?(content, "max_header_count") do
+            source
+          else
+            # Add http_1_options to the http config for the endpoint in production block
+            updated_content =
+              String.replace(
+                content,
+                ~r/(if\s+config_env\(\)\s*==\s*:prod\s+do.*?config\s+:#{app_name},\s+#{inspect(endpoint_module)}[^[]*\[.*?http:\s*\[)/s,
+                "\\1http_1_options: [max_header_count: 200], "
+              )
+
+            Rewrite.Source.update(source, :content, fn _ -> updated_content end)
+          end
         end)
 
       Igniter.add_notice(igniter, """
@@ -444,101 +476,6 @@ if Code.ensure_loaded?(Igniter) do
 
       This prevents "too many headers" errors from Shopify's OAuth/webhook requests.
       """)
-    end
-
-    # Add max_header_count to dev.exs config
-    defp add_max_header_count_to_config(zipper, app_name, endpoint_module) do
-      # Try to find and update the endpoint config
-      with {:ok, config_zipper} <-
-             Igniter.Code.Common.move_to_do_block_for_module_call(zipper, :config, [
-               app_name,
-               endpoint_module
-             ]),
-           {:ok, http_zipper} <- find_keyword_key(config_zipper, :http) do
-        # Add http_1_options to the http keyword list
-        add_http_1_options(http_zipper)
-      else
-        _ ->
-          # Can't find the config block, return unchanged
-          {:ok, zipper}
-      end
-    end
-
-    # Add max_header_count to runtime.exs production config
-    defp add_max_header_count_to_runtime_config(zipper, app_name, endpoint_module) do
-      # Try to find the production config block
-      # This is more complex because it's inside `if config_env() == :prod`
-      with {:ok, prod_block_zipper} <- find_production_config_block(zipper),
-           {:ok, config_zipper} <-
-             Igniter.Code.Common.move_to_do_block_for_module_call(prod_block_zipper, :config, [
-               app_name,
-               endpoint_module
-             ]),
-           {:ok, http_zipper} <- find_keyword_key(config_zipper, :http) do
-        # Add http_1_options to the http keyword list
-        add_http_1_options(http_zipper)
-      else
-        _ ->
-          # Can't find the production config block, return unchanged
-          {:ok, zipper}
-      end
-    end
-
-    # Find a keyword key in a keyword list
-    defp find_keyword_key(zipper, key) do
-      case Igniter.Code.Keyword.get_key(zipper, key) do
-        {:ok, _} = result -> result
-        :error -> :error
-      end
-    end
-
-    # Find the production config block (if config_env() == :prod do ... end)
-    defp find_production_config_block(zipper) do
-      zipper
-      |> Sourceror.Zipper.root()
-      |> Sourceror.Zipper.find(fn node ->
-        match?(
-          {:if, _,
-           [
-             {{:., _, [{:__aliases__, _, [:Config]}, :config_env]}, _, []},
-             [do: _, else: _]
-           ]},
-          node
-        ) or
-          match?(
-            {:if, _, [{{:., _, [:config_env]}, _, []}, [do: _, else: _]]},
-            node
-          )
-      end)
-      |> case do
-        nil -> :error
-        zipper -> {:ok, zipper}
-      end
-    end
-
-    # Add http_1_options with max_header_count to an http: keyword list
-    defp add_http_1_options(zipper) do
-      node = Sourceror.Zipper.node(zipper)
-
-      case node do
-        # http: [existing, options]
-        {key, keyword_list} when is_list(keyword_list) ->
-          # Check if http_1_options already exists
-          if Keyword.has_key?(keyword_list, :http_1_options) do
-            {:ok, zipper}
-          else
-            # Add http_1_options at the beginning with a comment
-            new_keyword_list = [
-              {:http_1_options, [max_header_count: 200]} | keyword_list
-            ]
-
-            updated_zipper = Sourceror.Zipper.replace(zipper, {key, new_keyword_list})
-            {:ok, updated_zipper}
-          end
-
-        _ ->
-          {:ok, zipper}
-      end
     end
 
     defp generate_salt do
