@@ -448,65 +448,40 @@ if Code.ensure_loaded?(Igniter) do
 
     # Add max_header_count to dev.exs config
     defp add_max_header_count_to_config(zipper, app_name, endpoint_module) do
-      # Check if max_header_count is already configured by walking the entire AST
-      root_node = zipper |> Sourceror.Zipper.root() |> Sourceror.Zipper.node()
-
-      if has_max_header_count?(root_node) do
-        {:ok, zipper}
+      # Try to find and update the endpoint config
+      with {:ok, config_zipper} <-
+             Igniter.Code.Common.move_to_do_block_for_module_call(zipper, :config, [
+               app_name,
+               endpoint_module
+             ]),
+           {:ok, http_zipper} <- find_keyword_key(config_zipper, :http) do
+        # Add http_1_options to the http keyword list
+        add_http_1_options(http_zipper)
       else
-        # Try to find and update the endpoint config
-        with {:ok, config_zipper} <-
-               Igniter.Code.Common.move_to_do_block_for_module_call(zipper, :config, [
-                 app_name,
-                 endpoint_module
-               ]),
-             {:ok, http_zipper} <- find_keyword_key(config_zipper, :http) do
-          # Add http_1_options to the http keyword list
-          add_http_1_options(http_zipper)
-        else
-          _ ->
-            # Can't find the config block, return unchanged
-            {:ok, zipper}
-        end
+        _ ->
+          # Can't find the config block, return unchanged
+          {:ok, zipper}
       end
     end
 
     # Add max_header_count to runtime.exs production config
     defp add_max_header_count_to_runtime_config(zipper, app_name, endpoint_module) do
-      # Check if max_header_count is already configured by walking the entire AST
-      root_node = zipper |> Sourceror.Zipper.root() |> Sourceror.Zipper.node()
-
-      if has_max_header_count?(root_node) do
-        {:ok, zipper}
+      # Try to find the production config block
+      # This is more complex because it's inside `if config_env() == :prod`
+      with {:ok, prod_block_zipper} <- find_production_config_block(zipper),
+           {:ok, config_zipper} <-
+             Igniter.Code.Common.move_to_do_block_for_module_call(prod_block_zipper, :config, [
+               app_name,
+               endpoint_module
+             ]),
+           {:ok, http_zipper} <- find_keyword_key(config_zipper, :http) do
+        # Add http_1_options to the http keyword list
+        add_http_1_options(http_zipper)
       else
-        # Try to find the production config block
-        # This is more complex because it's inside `if config_env() == :prod`
-        with {:ok, prod_block_zipper} <- find_production_config_block(zipper),
-             {:ok, config_zipper} <-
-               Igniter.Code.Common.move_to_do_block_for_module_call(prod_block_zipper, :config, [
-                 app_name,
-                 endpoint_module
-               ]),
-             {:ok, http_zipper} <- find_keyword_key(config_zipper, :http) do
-          # Add http_1_options to the http keyword list
-          add_http_1_options(http_zipper)
-        else
-          _ ->
-            # Can't find the production config block, return unchanged
-            {:ok, zipper}
-        end
+        _ ->
+          # Can't find the production config block, return unchanged
+          {:ok, zipper}
       end
-    end
-
-    # Check if max_header_count is already in the file
-    # Expects raw AST node, not a zipper
-    defp has_max_header_count?(ast) do
-      ast
-      |> Macro.postwalk(false, fn
-        {:max_header_count, _, _}, _acc -> {:max_header_count, true}
-        node, acc -> {node, acc}
-      end)
-      |> elem(1)
     end
 
     # Find a keyword key in a keyword list
