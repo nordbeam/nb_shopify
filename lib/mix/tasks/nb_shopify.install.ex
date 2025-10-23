@@ -448,8 +448,10 @@ if Code.ensure_loaded?(Igniter) do
 
     # Add max_header_count to dev.exs config
     defp add_max_header_count_to_config(zipper, app_name, endpoint_module) do
-      # Check if max_header_count is already configured
-      if has_max_header_count?(zipper) do
+      # Check if max_header_count is already configured by walking the entire AST
+      root_node = zipper |> Sourceror.Zipper.root() |> Sourceror.Zipper.node()
+
+      if has_max_header_count?(root_node) do
         {:ok, zipper}
       else
         # Try to find and update the endpoint config
@@ -471,8 +473,10 @@ if Code.ensure_loaded?(Igniter) do
 
     # Add max_header_count to runtime.exs production config
     defp add_max_header_count_to_runtime_config(zipper, app_name, endpoint_module) do
-      # Check if max_header_count is already configured
-      if has_max_header_count?(zipper) do
+      # Check if max_header_count is already configured by walking the entire AST
+      root_node = zipper |> Sourceror.Zipper.root() |> Sourceror.Zipper.node()
+
+      if has_max_header_count?(root_node) do
         {:ok, zipper}
       else
         # Try to find the production config block
@@ -495,20 +499,9 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     # Check if max_header_count is already in the file
-    defp has_max_header_count?(ast_or_zipper) do
-      # Handle both raw AST and zipper - Igniter.update_elixir_file may pass either
-      node =
-        case ast_or_zipper do
-          %Sourceror.Zipper{} = zipper ->
-            zipper
-            |> Sourceror.Zipper.root()
-            |> Sourceror.Zipper.node()
-
-          ast ->
-            ast
-        end
-
-      node
+    # Expects raw AST node, not a zipper
+    defp has_max_header_count?(ast) do
+      ast
       |> Macro.postwalk(false, fn
         {:max_header_count, _, _}, _acc -> {:max_header_count, true}
         node, acc -> {node, acc}
