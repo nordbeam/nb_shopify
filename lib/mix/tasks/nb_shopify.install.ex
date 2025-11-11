@@ -144,6 +144,8 @@ if Code.ensure_loaded?(Igniter) do
     @impl Igniter.Mix.Task
     def info(_argv, _parent) do
       %Igniter.Mix.Task.Info{
+        group: :nb,
+        example: "mix nb_shopify.install --with-cli --with-webhooks --with-database",
         schema: [
           with_webhooks: :boolean,
           with_database: :boolean,
@@ -165,6 +167,7 @@ if Code.ensure_loaded?(Igniter) do
     @impl Igniter.Mix.Task
     def igniter(igniter) do
       igniter
+      |> Igniter.Project.Formatter.import_dep(:nb_shopify)
       |> add_dependencies()
       |> add_config()
       |> configure_endpoint()
@@ -807,25 +810,27 @@ if Code.ensure_loaded?(Igniter) do
           {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
 
           # Verify webhook authenticity
-          if NbShopify.verify_webhook_hmac(raw_body, hmac) do
-            # Queue webhook for background processing
-            %{
-              topic: topic,
-              shop_domain: shop_domain,
-              payload: params
-            }
-            |> NbShopify.Workers.WebhookWorker.new()
-            |> Oban.insert()
+          case NbShopify.verify_webhook_hmac(raw_body, hmac) do
+            {:ok, :verified} ->
+              # Queue webhook for background processing
+              %{
+                topic: topic,
+                shop_domain: shop_domain,
+                payload: params
+              }
+              |> NbShopify.Workers.WebhookWorker.new()
+              |> Oban.insert()
 
-            Logger.info("Webhook queued: \#{topic} from \#{shop_domain}")
+              Logger.info("Webhook queued: \#{topic} from \#{shop_domain}")
 
-            json(conn, %{status: "ok"})
-          else
-            Logger.error("Invalid webhook HMAC from \#{shop_domain}")
+              json(conn, %{status: "ok"})
 
-            conn
-            |> put_status(:unauthorized)
-            |> json(%{error: "Invalid HMAC"})
+            {:error, :invalid_hmac} ->
+              Logger.error("Invalid webhook HMAC from \#{shop_domain}")
+
+              conn
+              |> put_status(:unauthorized)
+              |> json(%{error: "Invalid HMAC"})
           end
         end
       """
