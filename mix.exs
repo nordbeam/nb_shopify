@@ -47,7 +47,7 @@ defmodule NbShopify.MixProject do
       # Dev/Test dependencies
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:igniter, "~> 0.6", optional: true, runtime: false}
+      {:igniter, "~> 0.7", optional: true, runtime: false}
     ]
   end
 
