@@ -53,6 +53,62 @@ defmodule NbShopify do
   require Logger
 
   @doc """
+  Validates that all required configuration is present.
+
+  This function should be called during application startup to catch
+  configuration errors early. Returns `:ok` if valid, or raises `NbShopify.ConfigError`.
+
+  ## Example
+
+      # In your application.ex
+      defmodule MyApp.Application do
+        def start(_type, _args) do
+          # Validate NbShopify config at startup
+          NbShopify.validate_config!()
+
+          children = [...]
+          Supervisor.start_link(children, strategy: :one_for_one)
+        end
+      end
+  """
+  def validate_config! do
+    required_keys = [:api_key, :api_secret]
+
+    for key <- required_keys do
+      value = get_config(key)
+
+      cond do
+        is_nil(value) ->
+          raise NbShopify.ConfigError, key: key
+
+        not is_binary(value) ->
+          raise NbShopify.ConfigError,
+            key: key,
+            message: "must be a string, got: #{inspect(value)}"
+
+        String.trim(value) == "" ->
+          raise NbShopify.ConfigError,
+            key: key,
+            message: "cannot be empty"
+
+        true ->
+          :ok
+      end
+    end
+
+    # Validate api_version format if provided
+    version = api_version()
+
+    unless Regex.match?(~r/^\d{4}-\d{2}$/, version) do
+      raise NbShopify.ConfigError,
+        key: :api_version,
+        message: "must be in format YYYY-MM, got: #{inspect(version)}"
+    end
+
+    :ok
+  end
+
+  @doc """
   Returns the configured API version.
   Defaults to "2026-01" if not configured.
   """
@@ -88,14 +144,16 @@ defmodule NbShopify do
 
   ## Returns
 
-  Boolean indicating whether the HMAC is valid.
+    - `{:ok, :verified}` if the HMAC is valid
+    - `{:error, :invalid_hmac}` if the HMAC is invalid
 
   ## Example
 
-      if NbShopify.verify_webhook_hmac(request_body, hmac_header) do
-        # Process webhook
-      else
-        # Reject webhook
+      case NbShopify.verify_webhook_hmac(request_body, hmac_header) do
+        {:ok, :verified} ->
+          # Process webhook
+        {:error, :invalid_hmac} ->
+          # Reject webhook
       end
   """
   def verify_webhook_hmac(request_body, hmac_header) when is_binary(request_body) do
@@ -103,7 +161,11 @@ defmodule NbShopify do
       :crypto.mac(:hmac, :sha256, api_secret(), request_body)
       |> Base.encode64()
 
-    Plug.Crypto.secure_compare(computed_hmac, hmac_header)
+    if Plug.Crypto.secure_compare(computed_hmac, hmac_header) do
+      {:ok, :verified}
+    else
+      {:error, :invalid_hmac}
+    end
   end
 
   @doc """
@@ -129,7 +191,8 @@ defmodule NbShopify do
   """
   def verify_session_token(token) do
     # Session tokens are JWTs signed with the app's client secret
-    signer = Joken.Signer.create("HS256", api_secret())
+    # Cache the signer using persistent_term for performance
+    signer = get_or_create_signer()
 
     with {:ok, claims} <- Joken.Signer.verify(token, signer),
          :ok <- validate_dest(claims["dest"]),
@@ -138,7 +201,7 @@ defmodule NbShopify do
       {:ok, claims}
     else
       {:error, reason} = error ->
-        Logger.warning("Session token verification failed: #{inspect(reason)}")
+        Logger.warning("Session token verification failed", reason: inspect(reason))
         error
     end
   end
@@ -171,33 +234,44 @@ defmodule NbShopify do
       NbShopify.graphql(shop, query, %{id: "gid://shopify/Product/123"})
   """
   def graphql(shop, query, variables \\ %{}) do
-    url = "https://#{shop.shop_domain}/admin/api/#{api_version()}/graphql.json"
+    with {:ok, _domain} <- validate_shop_domain(shop.shop_domain) do
+      url = "https://#{shop.shop_domain}/admin/api/#{api_version()}/graphql.json"
 
-    headers = [
-      {"X-Shopify-Access-Token", shop.access_token},
-      {"Content-Type", "application/json"}
-    ]
+      headers = [
+        {"X-Shopify-Access-Token", shop.access_token},
+        {"Content-Type", "application/json"}
+      ]
 
-    body = %{
-      query: query,
-      variables: variables
-    }
+      body = %{
+        query: query,
+        variables: variables
+      }
 
-    case Req.post(url, json: body, headers: headers) do
-      {:ok, %{status: 200, body: response}} ->
-        if Map.has_key?(response, "errors") do
-          {:error, {:graphql_errors, response["errors"]}}
-        else
-          {:ok, response}
-        end
+      case Req.post(url, json: body, headers: headers) do
+        {:ok, %{status: 200, body: response}} ->
+          if Map.has_key?(response, "errors") do
+            {:error, {:graphql_errors, response["errors"]}}
+          else
+            {:ok, response}
+          end
 
-      {:ok, %{status: status, body: body}} ->
-        Logger.error("Shopify GraphQL request failed: #{status} - #{inspect(body)}")
-        {:error, {:request_failed, status}}
+        {:ok, %{status: status, body: body}} ->
+          Logger.error("GraphQL request failed",
+            status: status,
+            shop: shop.shop_domain,
+            error: inspect(body)
+          )
 
-      {:error, reason} ->
-        Logger.error("Shopify GraphQL request error: #{inspect(reason)}")
-        {:error, reason}
+          {:error, {:request_failed, status}}
+
+        {:error, reason} ->
+          Logger.error("GraphQL request error",
+            shop: shop.shop_domain,
+            error: inspect(reason)
+          )
+
+          {:error, reason}
+      end
     end
   end
 
@@ -222,27 +296,42 @@ defmodule NbShopify do
       NbShopify.rest(shop, :post, "products.json", %{product: %{title: "New Product"}})
   """
   def rest(shop, method, path, body \\ nil) do
-    url = "https://#{shop.shop_domain}/admin/api/#{api_version()}/#{path}"
+    with {:ok, _domain} <- validate_shop_domain(shop.shop_domain) do
+      url = "https://#{shop.shop_domain}/admin/api/#{api_version()}/#{path}"
 
-    headers = [
-      {"X-Shopify-Access-Token", shop.access_token},
-      {"Content-Type", "application/json"}
-    ]
+      headers = [
+        {"X-Shopify-Access-Token", shop.access_token},
+        {"Content-Type", "application/json"}
+      ]
 
-    opts = [headers: headers]
-    opts = if body, do: Keyword.put(opts, :json, body), else: opts
+      opts = [headers: headers]
+      opts = if body, do: Keyword.put(opts, :json, body), else: opts
 
-    case apply(Req, method, [url, opts]) do
-      {:ok, %{status: status, body: response}} when status in 200..299 ->
-        {:ok, response}
+      case apply(Req, method, [url, opts]) do
+        {:ok, %{status: status, body: response}} when status in 200..299 ->
+          {:ok, response}
 
-      {:ok, %{status: status, body: body}} ->
-        Logger.error("Shopify REST request failed: #{status} - #{inspect(body)}")
-        {:error, {:request_failed, status}}
+        {:ok, %{status: status, body: body}} ->
+          Logger.error("REST request failed",
+            status: status,
+            method: method,
+            path: path,
+            shop: shop.shop_domain,
+            error: inspect(body)
+          )
 
-      {:error, reason} ->
-        Logger.error("Shopify REST request error: #{inspect(reason)}")
-        {:error, reason}
+          {:error, {:request_failed, status}}
+
+        {:error, reason} ->
+          Logger.error("REST request error",
+            method: method,
+            path: path,
+            shop: shop.shop_domain,
+            error: inspect(reason)
+          )
+
+          {:error, reason}
+      end
     end
   end
 
@@ -251,6 +340,43 @@ defmodule NbShopify do
   defp get_config(key, default \\ nil) do
     Application.get_env(:nb_shopify, key, default)
   end
+
+  defp get_or_create_signer do
+    # Use persistent_term for fast, read-heavy caching of the signer
+    key = {__MODULE__, :signer, api_secret()}
+
+    case :persistent_term.get(key, nil) do
+      nil ->
+        signer = Joken.Signer.create("HS256", api_secret())
+        :persistent_term.put(key, signer)
+        signer
+
+      signer ->
+        signer
+    end
+  end
+
+  @doc false
+  def validate_shop_domain(domain) when is_binary(domain) do
+    cond do
+      String.trim(domain) == "" ->
+        {:error, :empty_domain}
+
+      String.ends_with?(domain, ".myshopify.com") ->
+        {:ok, domain}
+
+      # Allow localhost and custom domains for development/testing
+      String.contains?(domain, "localhost") or String.contains?(domain, "127.0.0.1") ->
+        {:ok, domain}
+
+      # Reject invalid domains
+      true ->
+        {:error, :invalid_shop_domain}
+    end
+  end
+
+  def validate_shop_domain(nil), do: {:error, :missing_domain}
+  def validate_shop_domain(_), do: {:error, :invalid_domain_type}
 
   defp validate_dest(dest) when is_binary(dest) do
     # Validate that dest is a valid myshopify.com domain

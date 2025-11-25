@@ -210,10 +210,18 @@ def create(conn, params) do
   hmac = get_req_header(conn, "x-shopify-hmac-sha256") |> List.first()
   {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
 
-  if NbShopify.verify_webhook_hmac(raw_body, hmac) do
-    %{topic: topic, shop_domain: shop_domain, payload: params}
-    |> NbShopify.Workers.WebhookWorker.new()
-    |> Oban.insert()
+  case NbShopify.verify_webhook_hmac(raw_body, hmac) do
+    {:ok, :verified} ->
+      %{topic: topic, shop_domain: shop_domain, payload: params}
+      |> NbShopify.Workers.WebhookWorker.new()
+      |> Oban.insert()
+
+      json(conn, %{status: "ok"})
+
+    {:error, :invalid_hmac} ->
+      conn
+      |> put_status(:unauthorized)
+      |> json(%{error: "Invalid HMAC"})
   end
 end
 ```

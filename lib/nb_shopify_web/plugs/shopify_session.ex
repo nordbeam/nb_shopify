@@ -33,7 +33,16 @@ defmodule NbShopifyWeb.Plugs.ShopifySession do
   - `get_shop_by_id`: `(id :: term()) :: shop | nil`
   - `get_shop_by_domain`: `(domain :: String.t()) :: shop | nil`
   - `upsert_shop`: `(attrs :: map()) :: {:ok, shop} | {:error, term()}`
-  - `post_install`: `(shop :: term(), is_first_install :: boolean()) :: :ok` (optional)
+  - `post_install`: `(shop :: term(), is_first_install :: boolean()) :: :ok | {:ok, term()} | {:error, term()}` (optional)
+
+  **Note**: The `post_install` callback runs synchronously. For long-running tasks
+  (webhook registration, data sync), use Oban to enqueue a job instead:
+
+      def post_install(shop, is_first_install) do
+        %{shop_id: shop.id, first_install: is_first_install}
+        |> MyApp.PostInstallWorker.new()
+        |> Oban.insert()
+      end
 
   ## Token Exchange Scenarios
 
@@ -96,7 +105,7 @@ defmodule NbShopifyWeb.Plugs.ShopifySession do
         case get_shop_by_id.(shop_id) do
           nil ->
             # Session exists but shop doesn't - clear session and retry
-            Logger.warning("Shop ID #{shop_id} in session not found in DB")
+            Logger.warning("Shop not found in database", shop_id: shop_id)
 
             conn
             |> clear_session()
@@ -135,7 +144,7 @@ defmodule NbShopifyWeb.Plugs.ShopifySession do
             install_or_update_shop(conn, shop_domain, token, opts)
 
           {:error, reason} ->
-            Logger.error("Session token verification failed: #{inspect(reason)}")
+            Logger.error("Session token verification failed", reason: inspect(reason))
 
             conn
             |> put_flash(:error, "Invalid session. Please reopen the app.")
@@ -166,7 +175,7 @@ defmodule NbShopifyWeb.Plugs.ShopifySession do
       |> assign(:shop, shop)
     else
       {:error, :save_shop, changeset} ->
-        Logger.error("Failed to save shop: #{inspect(changeset)}")
+        Logger.error("Failed to save shop", error: inspect(changeset))
 
         conn
         |> put_flash(:error, "Failed to save shop data.")
@@ -174,7 +183,7 @@ defmodule NbShopifyWeb.Plugs.ShopifySession do
         |> halt()
 
       {:error, reason} ->
-        Logger.error("Token exchange failed: #{inspect(reason)}")
+        Logger.error("Token exchange failed", reason: inspect(reason))
 
         conn
         |> put_flash(:error, "Authentication failed. Please try again.")
@@ -184,11 +193,11 @@ defmodule NbShopifyWeb.Plugs.ShopifySession do
   end
 
   defp log_install_type(shop_domain, true = _is_first_install) do
-    Logger.info("First install for shop: #{shop_domain}")
+    Logger.info("First install", shop: shop_domain)
   end
 
   defp log_install_type(shop_domain, _is_first_install) do
-    Logger.info("Updating access token for shop: #{shop_domain}")
+    Logger.info("Updating access token", shop: shop_domain)
   end
 
   defp save_shop(token_data, shop_domain, upsert_shop_fn) do
@@ -204,14 +213,36 @@ defmodule NbShopifyWeb.Plugs.ShopifySession do
     end
   end
 
-  defp maybe_run_post_install(shop, true = _is_first_install, post_install)
+  defp maybe_run_post_install(shop, is_first_install, post_install)
        when is_function(post_install) do
-    Task.start(fn -> post_install.(shop, true) end)
-  end
+    # Run post-install synchronously with proper error handling
+    # If you need async processing, use Oban instead of Task.start
+    case post_install.(shop, is_first_install) do
+      :ok ->
+        :ok
 
-  defp maybe_run_post_install(shop, false = _is_first_install, post_install)
-       when is_function(post_install) do
-    Task.start(fn -> post_install.(shop, false) end)
+      {:ok, _result} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Post-install callback failed",
+          shop_id: Map.get(shop, :id),
+          shop_domain: Map.get(shop, :shop_domain),
+          first_install: is_first_install,
+          reason: inspect(reason)
+        )
+
+        :ok
+
+      _other ->
+        Logger.warning("Post-install callback returned unexpected value",
+          shop_id: Map.get(shop, :id),
+          shop_domain: Map.get(shop, :shop_domain),
+          first_install: is_first_install
+        )
+
+        :ok
+    end
   end
 
   defp maybe_run_post_install(_shop, _is_first_install, _post_install), do: :ok

@@ -50,34 +50,45 @@ defmodule NbShopify.TokenExchange do
     - `{:error, reason}` - Network or other error
   """
   def exchange_token(shop_domain, session_token) do
-    url = "https://#{shop_domain}/admin/oauth/access_token"
+    with {:ok, _domain} <- NbShopify.validate_shop_domain(shop_domain) do
+      url = "https://#{shop_domain}/admin/oauth/access_token"
 
-    body = %{
-      client_id: NbShopify.api_key(),
-      client_secret: NbShopify.api_secret(),
-      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-      subject_token: session_token,
-      subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
-      requested_token_type: "urn:shopify:params:oauth:token-type:offline-access-token"
-    }
+      body = %{
+        client_id: NbShopify.api_key(),
+        client_secret: NbShopify.api_secret(),
+        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+        subject_token: session_token,
+        subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+        requested_token_type: "urn:shopify:params:oauth:token-type:offline-access-token"
+      }
 
-    case Req.post(url, json: body) do
-      {:ok, %{status: 200, body: response}} ->
-        Logger.info("Token exchange successful for shop: #{shop_domain}")
+      case Req.post(url, json: body) do
+        {:ok, %{status: 200, body: response}} ->
+          Logger.info("Token exchange successful", shop: shop_domain)
 
-        {:ok,
-         %{
-           access_token: response["access_token"],
-           scope: response["scope"]
-         }}
+          {:ok,
+           %{
+             access_token: response["access_token"],
+             scope: response["scope"]
+           }}
 
-      {:ok, %{status: status, body: body}} ->
-        Logger.error("Token exchange failed for #{shop_domain}: #{status} - #{inspect(body)}")
-        {:error, {:exchange_failed, status}}
+        {:ok, %{status: status, body: body}} ->
+          Logger.error("Token exchange failed",
+            shop: shop_domain,
+            status: status,
+            error: inspect(body)
+          )
 
-      {:error, reason} ->
-        Logger.error("Token exchange request error for #{shop_domain}: #{inspect(reason)}")
-        {:error, reason}
+          {:error, {:exchange_failed, status}}
+
+        {:error, reason} ->
+          Logger.error("Token exchange request error",
+            shop: shop_domain,
+            error: inspect(reason)
+          )
+
+          {:error, reason}
+      end
     end
   end
 end

@@ -64,7 +64,7 @@ NbShopify.rest(shop, :post, "products.json", %{product: %{title: "New"}})
 ### Webhook Verification
 ```elixir
 NbShopify.verify_webhook_hmac(raw_body, hmac_header)
-# Returns: true | false
+# Returns: {:ok, :verified} | {:error, :invalid_hmac}
 ```
 
 ## Phoenix Integration

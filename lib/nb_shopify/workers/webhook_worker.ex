@@ -60,17 +60,21 @@ if Code.ensure_loaded?(Oban) do
           shop_domain = get_req_header(conn, "x-shopify-shop-domain") |> List.first()
 
           # Verify HMAC
-          if NbShopify.verify_webhook_hmac(conn.assigns.raw_body, hmac) do
-            # Enqueue job
-            %{
-              topic: topic,
-              shop_domain: shop_domain,
-              payload: conn.body_params
-            }
-            |> NbShopify.Workers.WebhookWorker.new()
-            |> Oban.insert()
+          case NbShopify.verify_webhook_hmac(conn.assigns.raw_body, hmac) do
+            {:ok, :verified} ->
+              # Enqueue job
+              %{
+                topic: topic,
+                shop_domain: shop_domain,
+                payload: conn.body_params
+              }
+              |> NbShopify.Workers.WebhookWorker.new()
+              |> Oban.insert()
 
-            json(conn, %{status: "ok"})
+              json(conn, %{status: "ok"})
+
+            {:error, :invalid_hmac} ->
+              conn |> put_status(401) |> json(%{error: "Invalid HMAC"})
           end
         end
 
@@ -106,25 +110,25 @@ if Code.ensure_loaded?(Oban) do
     def perform(%Oban.Job{
           args: %{"topic" => topic, "shop_domain" => shop_domain, "payload" => payload}
         }) do
-      Logger.info("Processing webhook: #{topic} for shop #{shop_domain}")
+      Logger.info("Processing webhook", topic: topic, shop: shop_domain)
 
       with {:ok, config} <- get_webhook_config(),
            shop when not is_nil(shop) <- config.get_shop_by_domain.(shop_domain) do
         config.module.handle_webhook(topic, shop, payload)
       else
         {:error, :no_config} ->
-          Logger.error(
-            "Webhook handler not configured. See NbShopify.Workers.WebhookWorker docs."
+          Logger.error("Webhook handler not configured",
+            message: "See NbShopify.Workers.WebhookWorker docs"
           )
 
           {:error, :not_configured}
 
         nil ->
-          Logger.error("Shop not found for domain: #{shop_domain}")
+          Logger.error("Shop not found", shop: shop_domain)
           {:error, :shop_not_found}
 
         error ->
-          Logger.error("Failed to process webhook: #{inspect(error)}")
+          Logger.error("Failed to process webhook", shop: shop_domain, error: inspect(error))
           error
       end
     end

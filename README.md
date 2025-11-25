@@ -300,13 +300,15 @@ defmodule MyAppWeb.WebhookController do
     # Read raw body (configure Plug.Parsers to store it)
     raw_body = conn.assigns.raw_body
 
-    if NbShopify.verify_webhook_hmac(raw_body, hmac) do
-      conn
-    else
-      conn
-      |> put_status(:unauthorized)
-      |> json(%{error: "Invalid webhook signature"})
-      |> halt()
+    case NbShopify.verify_webhook_hmac(raw_body, hmac) do
+      {:ok, :verified} ->
+        conn
+
+      {:error, :invalid_hmac} ->
+        conn
+        |> put_status(:unauthorized)
+        |> json(%{error: "Invalid webhook signature"})
+        |> halt()
     end
   end
 end
@@ -489,7 +491,7 @@ end
 test "verifies webhook HMAC" do
   body = Jason.encode!(%{id: 123})
   hmac = :crypto.mac(:hmac, :sha256, "secret", body) |> Base.encode64()
-  assert NbShopify.verify_webhook_hmac(body, hmac)
+  assert {:ok, :verified} = NbShopify.verify_webhook_hmac(body, hmac)
 end
 ```
 
