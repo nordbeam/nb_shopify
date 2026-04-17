@@ -141,26 +141,32 @@ if Code.ensure_loaded?(Igniter) do
     use Igniter.Mix.Task
     require Igniter.Code.Common
 
+    @task_group :nb
+    @schema [
+      with_webhooks: :boolean,
+      with_database: :boolean,
+      with_cli: :boolean,
+      proxy: :boolean,
+      api_version: :string,
+      yes: :boolean
+    ]
+    @defaults [
+      api_version: "2026-01",
+      with_cli: false,
+      proxy: false
+    ]
+
     @impl Igniter.Mix.Task
-    def info(_argv, _parent) do
+    def info(argv, _parent) do
+      options = installer_options(argv)
+
       %Igniter.Mix.Task.Info{
-        group: :nb,
+        group: @task_group,
         example: "mix nb_shopify.install --with-cli --with-webhooks --with-database",
-        schema: [
-          with_webhooks: :boolean,
-          with_database: :boolean,
-          with_cli: :boolean,
-          proxy: :boolean,
-          api_version: :string,
-          yes: :boolean
-        ],
-        defaults: [
-          api_version: "2026-01",
-          with_cli: false,
-          proxy: false
-        ],
+        schema: @schema,
+        defaults: @defaults,
         positional: [],
-        composes: ["deps.get"]
+        adds_deps: optional_dependency_specs(options)
       }
     end
 
@@ -168,7 +174,7 @@ if Code.ensure_loaded?(Igniter) do
     def igniter(igniter) do
       igniter
       |> Igniter.Project.Formatter.import_dep(:nb_shopify)
-      |> add_dependencies()
+      |> ensure_optional_dependencies_added()
       |> add_config()
       |> configure_endpoint()
       |> configure_dev_environment()
@@ -183,16 +189,34 @@ if Code.ensure_loaded?(Igniter) do
       |> print_next_steps()
     end
 
-    # Add nb_shopify dependency to mix.exs
-    defp add_dependencies(igniter) do
-      # Don't add nb_shopify itself - it's already added by igniter.install
-      # This matches nb_inertia's pattern (see nb_inertia.install.ex line 159)
+    @doc false
+    def installer_options(argv) do
+      group = Igniter.Util.Info.group(%Igniter.Mix.Task.Info{group: @task_group}, task_name())
 
-      if igniter.args.options[:with_webhooks] do
-        Igniter.Project.Deps.add_dep(igniter, {:oban, "~> 2.15"})
-      else
-        igniter
-      end
+      {options, _argv, _invalid} =
+        argv
+        |> Igniter.Util.Info.args_for_group(group)
+        |> OptionParser.parse(switches: @schema)
+
+      Keyword.merge(@defaults, options)
+    end
+
+    @doc false
+    def optional_dependency_specs(options, installed_deps \\ installed_project_deps()) do
+      []
+      |> maybe_add_optional_dep(options[:with_webhooks], installed_deps, {:oban, "~> 2.15"})
+    end
+
+    # Add nb_shopify dependency to mix.exs
+    defp ensure_optional_dependencies_added(igniter) do
+      missing_specs =
+        igniter.args.options
+        |> optional_dependency_specs()
+        |> Enum.reject(fn spec -> dep_present?(igniter, dep_name(spec)) end)
+
+      Enum.reduce(missing_specs, igniter, fn spec, igniter ->
+        Igniter.Project.Deps.add_dep(igniter, spec)
+      end)
     end
 
     # Add configuration to config/runtime.exs using Igniter's configure_runtime_env
@@ -1976,6 +2000,38 @@ if Code.ensure_loaded?(Igniter) do
 
       Igniter.add_notice(igniter, base_steps <> database_steps <> webhook_steps <> final_steps)
     end
+
+    defp maybe_add_optional_dep(specs, true, installed_deps, spec) do
+      if dep_installed?(installed_deps, dep_name(spec)) do
+        specs
+      else
+        specs ++ [spec]
+      end
+    end
+
+    defp maybe_add_optional_dep(specs, _, _installed_deps, _spec), do: specs
+
+    defp installed_project_deps do
+      Mix.Project.config()
+      |> Keyword.get(:deps, [])
+      |> Enum.map(&dep_name/1)
+    end
+
+    defp dep_present?(igniter, dep) do
+      case Igniter.Project.Deps.get_dep(igniter, dep) do
+        {:ok, _} -> true
+        _ -> false
+      end
+    end
+
+    defp dep_installed?(installed_deps, dep), do: dep in installed_deps
+
+    defp dep_name({dep, _, _}) when is_atom(dep), do: dep
+    defp dep_name({dep, _}) when is_atom(dep), do: dep
+
+    defp task_name do
+      Mix.Task.task_name(__MODULE__)
+    end
   end
 else
   # Fallback if Igniter is not installed
@@ -1984,9 +2040,13 @@ else
     @moduledoc """
     The task 'nb_shopify.install' requires igniter for advanced installation features.
 
-    To use the full installer with automatic configuration, install igniter:
+    Add to your mix.exs for direct task usage:
 
-        {:igniter, "~> 0.6", only: [:dev]}
+        {:igniter, "~> 0.7", only: [:dev, :test]}
+
+    Or install Igniter first and use the preferred installer flow:
+
+        mix igniter.install nb_shopify
 
     Then run:
 
@@ -2000,18 +2060,24 @@ else
     use Mix.Task
 
     def run(_argv) do
-      Mix.shell().info("""
+      Mix.shell().error("""
       The task 'nb_shopify.install' requires igniter for automatic installation.
 
-      Add igniter to your mix.exs:
+      Add to your mix.exs for direct task usage:
 
-          {:igniter, "~> 0.6", only: [:dev]}
+          {:igniter, "~> 0.7", only: [:dev, :test]}
+
+      Or install Igniter first and use the preferred installer flow:
+
+          mix igniter.install nb_shopify
 
       Then run:
 
           mix deps.get
           mix nb_shopify.install
       """)
+
+      exit({:shutdown, 1})
     end
   end
 end

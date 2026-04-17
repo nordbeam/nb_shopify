@@ -20,16 +20,16 @@ The easiest way to install NbShopify is using the automated installer:
 
 ```bash
 # Basic installation
-mix igniter.install nb_shopify@github:nordbeam/nb_shopify
+mix igniter.install nb_shopify
 
 # Full installation with webhooks and database support
-mix igniter.install nb_shopify@github:nordbeam/nb_shopify --with-webhooks --with-database
+mix igniter.install nb_shopify --with-webhooks --with-database
 
 # With Shopify CLI support
-mix igniter.install nb_shopify@github:nordbeam/nb_shopify --with-cli --with-webhooks --with-database
+mix igniter.install nb_shopify --with-cli --with-webhooks --with-database
 
 # Custom API version
-mix igniter.install nb_shopify@github:nordbeam/nb_shopify --api-version "2025-10" --with-webhooks --with-database
+mix igniter.install nb_shopify --api-version "2025-10" --with-webhooks --with-database
 
 # Or run the installer directly after adding the dependency
 mix nb_shopify.install --with-webhooks --with-database --with-cli
