@@ -139,7 +139,6 @@ if Code.ensure_loaded?(Igniter) do
     """
 
     use Igniter.Mix.Task
-    require Igniter.Code.Common
 
     @task_group :nb
     @schema [
@@ -557,12 +556,11 @@ if Code.ensure_loaded?(Igniter) do
       - @shopify/polaris (Shopify's design system)
       - @shopify/app-bridge-types (TypeScript types)
 
-      Run your package manager to install:
-        cd assets && npm install
-      Or:
-        cd assets && bun install
-      Or:
-        cd assets && yarn install
+      Install the updated frontend dependencies:
+        cd assets && vp install       # Vite+ projects
+
+      For a legacy non-Vite+ project, use its existing package manager instead:
+        cd assets && npm install      # or bun/pnpm/yarn
       """)
     end
 
@@ -1521,7 +1519,7 @@ if Code.ensure_loaded?(Igniter) do
         - .env.example (environment variable template)
 
         To use Shopify CLI:
-        1. Install Shopify CLI: npm install -g @shopify/cli@latest
+        1. Install Shopify CLI: vp install -g @shopify/cli@latest
         2. Link your app: shopify app config link
         3. Start development: shopify app dev
 

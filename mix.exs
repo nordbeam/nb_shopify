@@ -2,7 +2,7 @@ defmodule NbShopify.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/nordbeam/nb"
+  @source_url "https://github.com/nordbeam/nb_shopify"
 
   def project do
     [
@@ -32,7 +32,7 @@ defmodule NbShopify.MixProject do
   defp deps do
     [
       # HTTP client for Shopify API requests
-      {:req, "~> 0.5"},
+      {:req, "~> 0.7"},
       # JWT handling for session tokens
       {:joken, "~> 2.6"},
       # Plug support for Phoenix integration
@@ -45,9 +45,9 @@ defmodule NbShopify.MixProject do
       {:oban, "~> 2.18", optional: true},
 
       # Dev/Test dependencies
-      {:ex_doc, "~> 0.31", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:igniter, "~> 0.7", optional: true, runtime: false}
+      {:igniter, "~> 0.8", optional: true, runtime: false}
     ]
   end
 

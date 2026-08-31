@@ -1,0 +1,22 @@
+{
+  "name": "nb_shopify",
+  "version": "0.1.0",
+  "description": "Version-aware Codex guidance for nb_shopify embedded apps, authentication, webhooks, and API clients.",
+  "author": { "name": "Nordbeam", "url": "https://github.com/nordbeam" },
+  "homepage": "https://github.com/nordbeam/nb_shopify",
+  "repository": "https://github.com/nordbeam/nb_shopify",
+  "license": "MIT",
+  "keywords": ["elixir", "phoenix", "shopify", "webhooks"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "nb_shopify",
+    "shortDescription": "Build and maintain Shopify Phoenix apps",
+    "longDescription": "Install, configure, upgrade, diagnose, and verify nb_shopify authentication, webhooks, API clients, and Phoenix integration.",
+    "developerName": "Nordbeam",
+    "category": "Developer Tools",
+    "capabilities": ["Install", "Configure", "Migrate", "Diagnose", "Verify"],
+    "websiteURL": "https://github.com/nordbeam/nb_shopify",
+    "brandColor": "#5E3AAE",
+    "defaultPrompt": ["Use $nb-shopify to implement or upgrade a Shopify Phoenix integration."]
+  }
+}

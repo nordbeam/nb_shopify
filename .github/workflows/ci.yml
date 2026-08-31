@@ -12,14 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        elixir: ['1.15', '1.16', '1.17', '1.18']
-        otp: ['25', '26', '27']
-        exclude:
+        include:
           - elixir: '1.15'
-            otp: '27'
+            otp: '25'
+          - elixir: '1.20'
+            otp: '29'
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Set up Elixir
       uses: erlef/setup-beam@v1
@@ -28,7 +28,7 @@ jobs:
         otp-version: ${{ matrix.otp }}
 
     - name: Restore dependencies cache
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           deps
@@ -48,9 +48,8 @@ jobs:
 
     - name: Check formatting
       run: mix format --check-formatted
-      if: matrix.elixir == '1.18' && matrix.otp == '27'
+      if: matrix.elixir == '1.20' && matrix.otp == '29'
 
     - name: Run Credo
       run: mix credo --strict
-      if: matrix.elixir == '1.18' && matrix.otp == '27'
-      continue-on-error: true
+      if: matrix.elixir == '1.20' && matrix.otp == '29'

@@ -1,0 +1,4 @@
+interface:
+  display_name: "nb Shopify"
+  short_description: "Integrate Shopify auth, APIs, and webhooks"
+  default_prompt: "Use $nb-shopify to install or diagnose a version-aware embedded Shopify app integration."
