@@ -33,8 +33,11 @@ defmodule NbShopify.MixProject do
     [
       # HTTP client for Shopify API requests
       {:req, "~> 0.7"},
-      # JWT handling for session tokens
-      {:joken, "~> 2.6"},
+      # JWT handling for session tokens. Joken 2.7 requires Elixir 1.16.
+      {:joken, "~> 2.6.2"},
+      # JOSE 1.11.12 uses the OTP 26+ dynamic() type and cannot compile on
+      # the OTP 25 runtime covered by this package's compatibility matrix.
+      {:jose, "== 1.11.10"},
       # Plug support for Phoenix integration
       {:plug, "~> 1.14"},
       # JSON encoding/decoding
