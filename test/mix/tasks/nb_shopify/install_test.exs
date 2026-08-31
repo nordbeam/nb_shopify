@@ -22,4 +22,11 @@ defmodule Mix.Tasks.NbShopify.InstallTest do
       assert Install.optional_dependency_specs(options, [:oban]) == []
     end
   end
+
+  describe "frontend dependency installation" do
+    test "pins the legacy npm path to Corepack npm 12" do
+      assert Install.npm_install_command() ==
+               "cd assets && corepack npm@12.0.2 install"
+    end
+  end
 end

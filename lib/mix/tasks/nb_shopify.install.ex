@@ -59,6 +59,8 @@ if Code.ensure_loaded?(Igniter) do
          - @shopify/app-bridge-react (React bindings)
          - @shopify/polaris (Shopify's design system)
          - @shopify/app-bridge-types (TypeScript types)
+       - Uses Vite+ for projects with `vp`; the legacy npm path is pinned to
+         Corepack npm 12.0.2 while Bun, pnpm, and Yarn remain supported
 
     4. **Router Setup**: Adds Shopify pipelines to your router:
        - `:shopify_app` pipeline with NbShopifyWeb plugs (library-provided, not generated)
@@ -141,6 +143,7 @@ if Code.ensure_loaded?(Igniter) do
     use Igniter.Mix.Task
 
     @task_group :nb
+    @npm_version "12.0.2"
     @schema [
       with_webhooks: :boolean,
       with_database: :boolean,
@@ -204,6 +207,11 @@ if Code.ensure_loaded?(Igniter) do
     def optional_dependency_specs(options, installed_deps \\ installed_project_deps()) do
       []
       |> maybe_add_optional_dep(options[:with_webhooks], installed_deps, {:oban, "~> 2.15"})
+    end
+
+    @doc false
+    def npm_install_command do
+      "cd assets && corepack npm@#{@npm_version} install"
     end
 
     # Add nb_shopify dependency to mix.exs
@@ -560,7 +568,7 @@ if Code.ensure_loaded?(Igniter) do
         cd assets && vp install       # Vite+ projects
 
       For a legacy non-Vite+ project, use its existing package manager instead:
-        cd assets && npm install      # or bun/pnpm/yarn
+        #{npm_install_command()}      # or bun/pnpm/yarn
       """)
     end
 

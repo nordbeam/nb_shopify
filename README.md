@@ -43,6 +43,12 @@ The installer will:
 - Create webhook handler and controller (if `--with-webhooks`)
 - Configure Oban for webhook processing (if `--with-webhooks`)
 
+If `assets/package.json` already exists, the installer adds the Shopify
+frontend dependencies without changing the application's package manager. Use
+`vp install` for Vite+ projects; legacy npm projects should use the pinned
+`cd assets && corepack npm@12.0.2 install` command. Existing Bun, pnpm, and Yarn
+projects keep their corresponding package-manager install commands.
+
 ### Manual Installation
 
 Add `nb_shopify` to your list of dependencies in `mix.exs`:
