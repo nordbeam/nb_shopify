@@ -64,14 +64,16 @@ defmodule NbShopify.MixProject do
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url
-      }
+      },
+      files: ~w(lib mix.exs README.md usage-rules.md usage-rules .formatter.exs)
     ]
   end
 
   defp docs do
     [
       main: "readme",
-      extras: ["README.md"]
+      extras: ["README.md", "usage-rules.md"],
+      groups_for_extras: [Guides: ["usage-rules.md"]]
     ]
   end
 end

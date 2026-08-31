@@ -14,6 +14,35 @@ A reusable Shopify integration library for Elixir applications. Built for modern
 
 ## Installation
 
+### Agent skills with UsageRules
+
+NbShopify ships a prebuilt skill for coding agents. In the consuming Phoenix
+application, install UsageRules and enable the package skill in `mix.exs`:
+
+```bash
+mix igniter.install usage_rules
+```
+
+```elixir
+def project do
+  [
+    # ...existing project configuration...
+    usage_rules: [
+      skills: [
+        location: ".agents/skills",
+        package_skills: [:nb_shopify]
+      ]
+    ]
+  ]
+end
+```
+
+Then synchronize the configured skills:
+
+```bash
+mix usage_rules.sync
+```
+
 ### Automatic Installation (Recommended)
 
 The easiest way to install NbShopify is using the automated installer:
